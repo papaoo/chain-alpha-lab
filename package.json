@@ -1,0 +1,51 @@
+{
+  "name": "a-share-mainline-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke:local": "tsx scripts/smoke-local.ts",
+    "analysis:scheduled": "tsx scripts/scheduled-analysis.ts",
+    "analysis:daemon": "tsx scripts/scheduled-analysis.ts --daemon",
+    "db:audit": "tsx scripts/audit-database.ts",
+    "db:stats": "tsx scripts/database-stats.ts",
+    "db:backup": "tsx scripts/backup-database.ts",
+    "db:backups": "tsx scripts/backup-database.ts --list",
+    "db:archive": "tsx scripts/archive-database.ts",
+    "db:archives": "tsx scripts/archive-database.ts --list",
+    "fixture:export": "tsx scripts/export-analysis-fixture.ts",
+    "westock:smoke": "tsx scripts/westock-smoke.ts"
+  },
+  "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.4.1",
+    "clsx": "^2.1.1",
+    "klinecharts": "^9.8.12",
+    "lucide-react": "^0.468.0",
+    "next": "^15.1.4",
+    "node-cron": "^3.0.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "^15.1.4",
+    "playwright": "^1.60.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

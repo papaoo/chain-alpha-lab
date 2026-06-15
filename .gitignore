@@ -1,0 +1,50 @@
+# dependencies
+node_modules/
+
+# Next.js / build output
+.next/
+out/
+dist/
+coverage/
+tsconfig.tsbuildinfo
+
+# environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# logs
+*.log
+*.err.log
+*.out.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local automation / generated artifacts
+.agents/
+.tmp/
+.playwright-cli/
+test-results/
+output/
+chart-comparison-demo/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# project process notes not intended for public release
+规则*纠正.md
+代码全面审查报告.md
+5位agent输出.txt
+deep-open-source-discovery.md
+规划.md

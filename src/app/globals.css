@@ -1,0 +1,143 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #0b0f14;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: #0b0f14;
+}
+
+body {
+  min-height: 100dvh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(56, 189, 248, 0.1), transparent 28rem),
+    radial-gradient(circle at 84% 12%, rgba(239, 68, 68, 0.07), transparent 24rem),
+    linear-gradient(180deg, #0b0f14 0%, #111827 100%);
+  color: #f8fafc;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+::selection {
+  background: rgba(56, 189, 248, 0.28);
+}
+
+.scrollbar-thin {
+  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
+  scrollbar-width: thin;
+}
+
+.market-topology {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+    radial-gradient(circle at 62% 18%, rgba(56, 189, 248, 0.14), transparent 18rem),
+    radial-gradient(circle at 74% 74%, rgba(239, 68, 68, 0.09), transparent 20rem);
+  background-size: 42px 42px, 42px 42px, auto, auto;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.2));
+}
+
+.flow-line {
+  position: absolute;
+  height: 1px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.3), transparent);
+  transform: rotate(-9deg);
+}
+
+.flow-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, rgba(248, 250, 252, 0.8), transparent);
+  animation: flow-scan 3.8s linear infinite;
+}
+
+.signal-sweep {
+  animation: signal-sweep 2.8s ease-in-out infinite;
+}
+
+.drawer-enter {
+  animation: drawer-enter 180ms ease-out both;
+}
+
+.delay-300::after {
+  animation-delay: 0.3s;
+}
+
+.delay-700::after {
+  animation-delay: 0.7s;
+}
+
+@keyframes flow-scan {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+@keyframes signal-sweep {
+  0%,
+  100% {
+    transform: translateX(-18%);
+    opacity: 0.58;
+  }
+  50% {
+    transform: translateX(54%);
+    opacity: 1;
+  }
+}
+
+@keyframes drawer-enter {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
