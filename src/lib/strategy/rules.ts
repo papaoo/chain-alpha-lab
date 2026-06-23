@@ -37,7 +37,7 @@ import { evaluateMarket } from "@/lib/strategy/marketRules";
 import { parseSectors } from "@/lib/strategy/sectorParserRules";
 import { evaluateSectors } from "@/lib/strategy/sectorRules";
 import { buildCandidates, buildConstraints } from "@/lib/strategy/candidateRules";
-import { inferMarketSessionContext } from "@/lib/market/session";
+import { effectiveTradeDateForSession, inferMarketSessionContext } from "@/lib/market/session";
 import { normalizeSectorName, sameSectorName, sectorDisplayName } from "@/lib/sector/normalization";
 
 export function buildFactPackage(input: BuildRuleInput): FactPackage {
@@ -62,6 +62,7 @@ export function buildFactPackage(input: BuildRuleInput): FactPackage {
   return {
     schemaVersion: SCHEMA_VERSION,
     timestamp: input.timestamp,
+    tradeDate: effectiveTradeDateForSession(input.timestamp, session),
     session,
     facts,
     dataSource: {

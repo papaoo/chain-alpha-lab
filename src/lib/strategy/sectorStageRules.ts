@@ -23,8 +23,21 @@ export function decideSectorStage(input: {
   const hasCore = (sector.coreStocks ?? []).some((stock) => stock.role === "中军" && stock.score >= 35);
   const coreWeak = (sector.coreStocks ?? []).some((stock) => stock.role !== "补涨" && stock.risks.length >= 2);
   const openBoardPressure = (sector.openBoardCount ?? 0) > Math.max(2, (sector.limitUpCount ?? 0));
+  const hasCoreAnchor = hasLeader || hasCore;
+  const structureStillAlive =
+    hasCoreAnchor &&
+    (limitCore || broadEnough || change20 > 0) &&
+    (score >= 45 || (limitCore && change20 > 0) || veryBroad);
+  const fundingFades = inflow < 0 && inflow5 < 0;
+  const priceBreaks = change5 < -3 && change20 < 0;
+  const breadthBreaks = upPct !== undefined && upPct < 35 && change5 < 0;
+  const confirmedFade =
+    (fundingFades && (!structureStillAlive || (score < 45 && !limitCore) || (breadthScore <= 5 && !limitCore))) ||
+    (priceBreaks && (!hasCoreAnchor || score < 55)) ||
+    (breadthBreaks && (!hasCoreAnchor || !limitCore));
 
-  if ((inflow < 0 && inflow5 < 0) || (change5 < -3 && change20 < 0) || (upPct !== undefined && upPct < 35 && change5 < 0)) return ZH.fading;
+  if (confirmedFade) return ZH.fading;
+  if ((fundingFades || priceBreaks || breadthBreaks) && structureStillAlive) return ZH.diverging;
   if (coreWeak || (change20 > 0 && (change < -1 || inflow < 0 || openBoardPressure) && (breadthScore <= 6 || inflow5 <= 0))) return ZH.diverging;
   if (score >= 78 && change > 2 && change5 > 5 && inflow > 0 && (veryBroad || limitCore) && hasLeader && !openBoardPressure) return ZH.accelerating;
   if (score >= 62 && change5 > 0 && (inflow5 > 0 || limitCore) && broadEnough && (hasLeader || hasCore)) return ZH.confirmed;

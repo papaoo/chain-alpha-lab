@@ -16,7 +16,7 @@ type SessionPhase =
   | "night_research"
   | "non_trading_day";
 
-const PHASE_COPY: Record<SessionPhase, {
+type PhaseCopy = {
   phaseLabel: string;
   headline: string;
   subline: string;
@@ -24,7 +24,9 @@ const PHASE_COPY: Record<SessionPhase, {
   mode: "trade" | "watch" | "review" | "research";
   tasks: string[];
   restrictions: string[];
-}> = {
+};
+
+const PHASE_COPY: Record<SessionPhase, PhaseCopy> = {
   premarket: {
     phaseLabel: "盘前计划",
     headline: "盘前只做计划，不把昨日结构当成今日确认。",
@@ -36,12 +38,12 @@ const PHASE_COPY: Record<SessionPhase, {
   },
   call_auction: {
     phaseLabel: "集合竞价",
-    headline: "竞价只看预演，开盘承接才是关键。",
+    headline: "竞价只能看预演，开盘承接才是关键。",
     subline: "适合识别竞价强弱、排除明显失真信号，等待 9:30 后承接验证。",
     expectedDataBasis: "竞价数据",
     mode: "watch",
     tasks: ["观察竞价高开是否有量", "标记一字/大幅高开不可追", "等待开盘 15 分钟承接"],
-    restrictions: ["竞价异动只作为弱参考", "不把竞价写成全天主线确认"]
+    restrictions: ["竞价异动只作弱参考", "不把竞价写成全天主线确认"]
   },
   morning: {
     phaseLabel: "早盘盯盘",

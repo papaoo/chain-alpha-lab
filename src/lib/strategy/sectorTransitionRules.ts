@@ -93,6 +93,7 @@ export function applySectorStageTransition(input: {
     };
   }
 
+  const previousStage = previous.stage;
   const coreStocks = input.sector.coreStocks ?? [];
   const limitUpCount = input.sector.limitUpCount ?? 0;
   const openBoardCount = input.sector.openBoardCount ?? 0;
@@ -124,6 +125,13 @@ export function applySectorStageTransition(input: {
     !openBoardPressure &&
     input.coreContinuity.state !== "换龙头待确认";
   const hardConfirm = broadConfirm || coreLimitConfirm || continuityConfirm;
+  const hasStrongFadeBufferEvidence = (input.limitPoolScore >= 6 && input.coreContinuity.score >= 8) || (hasCoreAnchor && input.coreContinuity.score >= 12);
+  const fadingNeedsBuffer =
+    (previousStage === ZH.confirmed || previousStage === ZH.accelerating) &&
+    input.rawStage === ZH.fading &&
+    (input.score >= 45 || hasStrongFadeBufferEvidence) &&
+    (hasCoreAnchor || input.coreContinuity.score >= 8 || input.limitPoolScore >= 6) &&
+    !(openBoardPressure && input.breadthScore <= 5 && input.fundingScore <= 4 && input.limitPoolScore < 6);
   const confirmPath = broadConfirm ? "广度确认" : coreLimitConfirm ? "涨停核心确认" : continuityConfirm ? "连续性确认" : "未硬确认";
   const confirmBlockers = [
     input.score < 64 ? `总分不足${input.score.toFixed(0)}/64` : "",
@@ -134,12 +142,15 @@ export function applySectorStageTransition(input: {
     openBoardPressure ? `炸板压力偏高：涨停${limitUpCount}只、炸板${openBoardCount}只` : "",
     coreChangeUnconfirmed ? `核心结构${input.coreContinuity.state}` : ""
   ].filter(Boolean);
-  const previousStage = previous.stage;
   let stage = input.rawStage;
   let adjusted = false;
   let reason = `上一期为${previousStage}，本期当日原始阶段为${input.rawStage}，阶段按证据${stageTransitionLabel(previousStage, input.rawStage)}；确认路径：${confirmPath}。`;
 
-  if ((previousStage === ZH.observe || previousStage === ZH.startup) && input.rawStage === ZH.confirmed && !hardConfirm) {
+  if (fadingNeedsBuffer) {
+    stage = ZH.diverging;
+    adjusted = true;
+    reason = `上一期为${previousStage}，本期原始阶段为退潮，但仍有核心锚、涨停核心或连续性分数支撑，先压制为分歧缓冲，等待下一期验证是真退潮还是分歧修复；当前评分${input.score.toFixed(0)}，核心连续性${input.coreContinuity.score}/20，涨停核心${input.limitPoolScore}/15。`;
+  } else if ((previousStage === ZH.observe || previousStage === ZH.startup) && input.rawStage === ZH.confirmed && !hardConfirm) {
     stage = ZH.startup;
     adjusted = true;
     reason = `上一期为${previousStage}，本期原始阶段直接升为确认，但尚未满足广度确认、涨停核心确认或连续性确认路径，先压制为启动并等待下一期延续验证；阻断项：${confirmBlockers.join("；") || "综合证据不足"}。`;

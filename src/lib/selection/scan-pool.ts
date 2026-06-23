@@ -1,4 +1,4 @@
-import { eastmoneyAdapter, type EastmoneyQuote } from "@/lib/eastmoney/adapter";
+import { fullAScanProvider, type FullAScanQuote, type FullASectorMembershipEvidence } from "@/lib/data/fullAScanProvider";
 import { buildCompleteness } from "@/lib/strategy/stockDataRules";
 import { evaluateStockActivity } from "@/lib/strategy/stockActivityRules";
 import { evaluateTradability } from "@/lib/strategy/stockTradabilityRules";
@@ -15,29 +15,18 @@ export interface FullAScanResult {
   rawCount: number;
 }
 
-interface SectorMembershipEvidence {
-  sector: SectorRuleResult;
-  boardType: "industry" | "concept";
-  boardCode?: string;
-  sourceUrl?: string;
-}
-
 export async function buildFullAScanCandidates(input: {
   strategyId?: SelectionStrategyId;
   limit: number;
   scanLimit?: number;
   sectors?: SectorRuleResult[];
 }): Promise<FullAScanResult> {
-  const fetchedAt = new Date().toISOString();
   const scanLimit = Math.min(Math.max(input.scanLimit ?? Math.max(input.limit * 5, 500), 100), 5000);
-  const [response, membership] = await Promise.all([
-    eastmoneyAdapter.getAllAQuotes(scanLimit, { timeoutMs: 45000, retries: 1 }),
-    buildSectorMembershipMap(input.sectors ?? [])
-  ]);
-  const quotes = response.data ?? [];
+  const scan = await fullAScanProvider.scan({ scanLimit, sectors: input.sectors ?? [] });
+  const quotes = scan.quotes;
   const candidates = quotes
     .filter(isTradableQuote)
-    .map((quote) => quoteToCandidate(quote, response.sourceUrl, fetchedAt, input.sectors ?? [], membership.byCode, input.strategyId))
+    .map((quote) => quoteToCandidate(quote, scan.sourceUrl, scan.fetchedAt, input.sectors ?? [], scan.membershipByCode, input.strategyId))
     .map((candidate) => ({ candidate, score: candidate.signalScore ?? 0 }))
     .sort((left, right) => right.score - left.score)
     .slice(0, input.limit)
@@ -46,17 +35,17 @@ export async function buildFullAScanCandidates(input: {
   return {
     candidates,
     warnings: [
-      ...response.warnings,
-      ...membership.warnings,
-      `全 A 扫描读取东方财富最新行情 ${quotes.length}/${scanLimit} 条，过滤 ST/停牌/极低流动性后入池 ${candidates.length} 只；该阶段只做盘口初筛，不替代正式策略评分。`
+      ...scan.warnings,
+      `全 A 扫描质量：${scan.quality}，${scan.qualityReason}`,
+      `全 A 扫描读取东方财富最新行情 ${quotes.length}/${scan.scanLimit} 条，过滤 ST/停牌/极低流动性后入池 ${candidates.length} 只；该阶段只做盘口初筛，不替代正式策略评分。`
     ],
-    sourceUrl: response.sourceUrl,
-    fetchedAt,
+    sourceUrl: scan.sourceUrl,
+    fetchedAt: scan.fetchedAt,
     rawCount: quotes.length
   };
 }
 
-function isTradableQuote(quote: EastmoneyQuote) {
+function isTradableQuote(quote: FullAScanQuote) {
   const name = quote.name ?? "";
   if (!quote.marketCode || !quote.code || !name) return false;
   if (/ST|退|退市|N |C /i.test(name)) return false;
@@ -67,11 +56,11 @@ function isTradableQuote(quote: EastmoneyQuote) {
 }
 
 function quoteToCandidate(
-  quote: EastmoneyQuote,
+  quote: FullAScanQuote,
   sourceUrl: string | undefined,
   fetchedAt: string,
   sectors: SectorRuleResult[],
-  membershipByCode: Map<string, SectorMembershipEvidence>,
+  membershipByCode: Map<string, FullASectorMembershipEvidence>,
   strategyId?: SelectionStrategyId
 ): StockCandidate {
   const code = normalizeStockCode(quote.marketCode || quote.code);
@@ -241,67 +230,6 @@ function findMatchingSector(industry: string | undefined, sectors: SectorRuleRes
     Boolean(sector.normalizedName && sameSectorName(industry, sector.normalizedName)) ||
     Boolean(sector.sourceNames?.some((name) => sameSectorName(industry, name)))
   );
-}
-
-async function buildSectorMembershipMap(sectors: SectorRuleResult[]) {
-  const byCode = new Map<string, SectorMembershipEvidence>();
-  const warnings: string[] = [];
-  const targetSectors = sectors
-    .filter((sector) => sector.stage !== "退潮")
-    .sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
-    .slice(0, 8);
-
-  await mapLimit(targetSectors, 3, async (sector) => {
-    const boardTypes: Array<"industry" | "concept"> = ["industry", "concept"];
-    const failedWarnings: string[] = [];
-    for (const boardType of boardTypes) {
-      const response = await eastmoneyAdapter.getSectorConstituents(sector.name, boardType, { timeoutMs: 30000, retries: 1 }).catch((error) => ({
-        data: null,
-        warnings: [`东方财富${boardType === "concept" ? "概念" : "行业"}板块成分获取失败：${sector.name} ${error instanceof Error ? error.message : String(error)}`],
-        sourceUrl: undefined
-      }));
-      const stocks = response.data?.stocks ?? [];
-      if (!stocks.length) {
-        failedWarnings.push(...response.warnings);
-        continue;
-      }
-      warnings.push(...response.warnings);
-      for (const stock of stocks) {
-        const code = normalizeStockCode(stock.marketCode || stock.code);
-        if (!byCode.has(code)) {
-          byCode.set(code, {
-            sector,
-            boardType,
-            boardCode: response.data?.boardCode,
-            sourceUrl: response.sourceUrl
-          });
-        }
-      }
-      break;
-    }
-    if (failedWarnings.length && !Array.from(byCode.values()).some((item) => item.sector.name === sector.name)) {
-      warnings.push(...failedWarnings);
-    }
-  });
-
-  if (targetSectors.length) {
-    warnings.push(`全 A 扫描已尝试补充当前主线成分股映射：板块 ${targetSectors.length} 个，成分股去重 ${byCode.size} 只。`);
-  }
-  return { byCode, warnings };
-}
-
-async function mapLimit<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>) {
-  const results: R[] = [];
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await worker(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 function scoreFullAQuoteCandidate(candidate: StockCandidate, strategyId?: SelectionStrategyId) {

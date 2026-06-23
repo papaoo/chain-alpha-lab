@@ -3,6 +3,7 @@ import type { ParsedCommandResult } from "@/lib/westock/parser";
 import { maxDefined, numberValue, pushFact } from "@/lib/strategy/utils";
 import { normalizeSectorName, sectorDisplayName } from "@/lib/sector/normalization";
 import { buildSectorCoreStocks } from "@/lib/strategy/sectorCoreStockRules";
+import { isAshareStockCode } from "@/lib/strategy/candidateUtils";
 
 export function parseSectors(
   board: ParsedCommandResult,
@@ -95,7 +96,7 @@ function enrichSectorSnapshots(
   const zbPools = limitPools.filter((pool) => pool.pool === "zb");
   return sectors.map((sector) => {
     const constituent = constituentsByName.get(sector.normalizedName ?? normalizeSectorName(sector.name));
-    const stocks = constituent?.stocks ?? [];
+    const stocks = (constituent?.stocks ?? []).filter((stock) => isAshareStockCode(stock.marketCode || stock.code));
     const validChanges = stocks.map((stock) => stock.changePct).filter((value): value is number => value !== undefined);
     const up = validChanges.filter((value) => value > 0).length;
     const down = validChanges.filter((value) => value < 0).length;

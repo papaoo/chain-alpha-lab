@@ -64,6 +64,52 @@ export interface SelectionPick {
   sectorName: string;
   price?: number;
   changePct?: number;
+  runtimeSnapshot?: {
+    latestPrice?: number;
+    changePct?: number;
+    amount?: number;
+    turnoverRate?: number;
+    mainNetInflow?: number;
+    trendState?: string;
+    fundFlowState?: string;
+    source: string;
+    fetchedAt?: string;
+    quoteUpdatedAt?: string;
+    latestKlineDate?: string;
+    expectedKlineDate?: string;
+    klineFreshnessStatus?: "current" | "stale" | "unknown";
+    klineClose?: number;
+    basis: "runtime_refresh" | "report_snapshot" | "mixed";
+    quality?: "complete" | "partial" | "quote_only" | "missing";
+    qualityLabel?: string;
+    actionability?: {
+      level: "actionable" | "reference_only" | "not_actionable";
+      label: string;
+      reason: string;
+      ageMinutes?: number;
+      staleAfterMinutes: number;
+      sessionPhase?: string;
+    };
+    coverage?: {
+      quote: boolean;
+      kline: boolean;
+      technical: boolean;
+      fundFlow: boolean;
+      company: boolean;
+    };
+    warnings: string[];
+  };
+  dataFreshness?: {
+    basis: "runtime_refresh" | "report_snapshot" | "mixed";
+    label: string;
+    refreshedAt?: string;
+    quote: "fresh" | "snapshot" | "missing";
+    kline: "fresh" | "snapshot" | "missing";
+    technical: "fresh" | "snapshot" | "missing";
+    fundFlow: "fresh" | "snapshot" | "missing";
+    company: "fresh" | "snapshot" | "missing";
+    warnings: string[];
+  };
   score: number;
   tier: "S" | "A" | "B" | "C" | "D";
   action: "重点观察" | "跟踪观察" | "条件等待" | "剔除";
@@ -71,6 +117,34 @@ export interface SelectionPick {
   blockers: string[];
   evidenceRefs: string[];
   scoreFactors: SelectionPickScoreFactor[];
+  serenityTag?: {
+    theme: string;
+    runId: string;
+    createdAt: string;
+    priority: "top" | "high" | "watch" | "low";
+    score: number;
+    evidenceStrength: "strong" | "medium" | "weak" | "needs_checking";
+    chainPosition: string;
+    constrains: string;
+    verdict: string;
+    missingProof: string[];
+    evidenceCoverage?: {
+      sourceCount: number;
+      strongCount: number;
+      mediumCount: number;
+      weakCount: number;
+      needsCheckingCount: number;
+      hardEvidenceCount: number;
+      sourceLabels: string[];
+      latestFetchedAt?: string;
+    };
+    researchBoundary?: {
+      level: "evidence_backed" | "candidate_watch" | "needs_hard_evidence" | "research_only";
+      label: string;
+      text: string;
+    };
+    nextResearchChecks?: string[];
+  };
 }
 
 export type SelectionAgentId =
@@ -81,7 +155,7 @@ export type SelectionAgentId =
   | "risk"
   | "chief_reviewer";
 
-export type SelectionAgentStatus = "success" | "disabled" | "rejected" | "failed";
+export type SelectionAgentStatus = "success" | "disabled" | "skipped" | "rejected" | "failed";
 
 export interface SelectionAgentStockOpinion {
   code: string;
@@ -132,13 +206,20 @@ export interface SelectionLlmMetrics {
   provider: string;
   model: string;
   promptChars: number;
+  responseChars?: number;
   estimatedInputTokens: number;
+  estimatedOutputTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
   elapsedMs: number;
   status: SelectionAgentStatus;
   errorCount: number;
   errors?: string[];
   maxTokens: number;
   temperature: number;
+  retryCount?: number;
+  skipReason?: string;
 }
 
 export interface SelectionRunResult {
@@ -149,6 +230,9 @@ export interface SelectionRunResult {
   ruleVersionLabel?: string;
   sourceReportId?: string;
   sourceReportCreatedAt?: string;
+  sourceReportTradeDate?: string;
+  runEffectiveTradeDate?: string;
+  freshnessStatus?: "current" | "stale" | "unknown";
   parameters: Record<string, unknown>;
   picks: SelectionPick[];
   rejected: SelectionPick[];
@@ -183,11 +267,19 @@ export interface SelectionRunSummary {
   ruleVersionLabel?: string;
   sourceReportId?: string;
   sourceReportCreatedAt?: string;
+  sourceReportTradeDate?: string;
+  runEffectiveTradeDate?: string;
+  freshnessStatus?: "current" | "stale" | "unknown";
   candidateCount: number;
   pickCount: number;
   rejectedCount: number;
   warningCount: number;
   warnings: string[];
-  topPickPreview: Array<Pick<SelectionPick, "code" | "name" | "score" | "tier" | "action">>;
+  warningPreview?: string[];
+  warningSummary?: import("@/lib/selection/warning-severity").SelectionWarningSummary;
+  topPickPreview: Array<
+    Pick<SelectionPick, "code" | "name" | "score" | "tier" | "action"> &
+      Partial<Pick<SelectionPick, "sectorName" | "price" | "changePct" | "runtimeSnapshot" | "dataFreshness">>
+  >;
   errorMessage?: string;
 }

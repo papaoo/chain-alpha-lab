@@ -7,15 +7,14 @@ import {
   normalizeCandidatePoolMode
 } from "@/lib/selection/pool-builders";
 import { buildFullAScanCandidates } from "@/lib/selection/scan-pool";
-import { eastmoneyAdapter } from "@/lib/eastmoney/adapter";
+import { candidateDataHydrator, type CandidateCompanyProfileResult } from "@/lib/data/candidateDataHydrator";
+import type { StockRealtimeSnapshot } from "@/lib/data/stockSnapshotGateway";
 import type { SelectionStrategyId } from "@/lib/selection/types";
 import { buildCompleteness, buildKlineSummary, evaluateFundFlowQuality, inferFundFlow, parseFundFlow, parseTechnical } from "@/lib/strategy/stockDataRules";
 import { normalizeStockCode } from "@/lib/strategy/candidateUtils";
 import { evaluateStockActivity, evaluateTradability } from "@/lib/strategy/stockSignalRules";
-import { rowMap } from "@/lib/strategy/utils";
-import { westockAdapter } from "@/lib/westock/adapter";
-import type { ParsedCommandResult } from "@/lib/westock/parser";
-import { buildCompanyKnowledge, buildShareholderMap, latestRowsByCode, rowsByCode } from "@/lib/strategy/companyKnowledge";
+import { distancePct } from "@/lib/strategy/utils";
+import { buildCompanyKnowledge, buildShareholderMap } from "@/lib/strategy/companyKnowledge";
 import type { StockCandidate } from "@/lib/types";
 
 export type LatestAnalysisReport = NonNullable<ReturnType<typeof getAnalysisReport>>;
@@ -118,90 +117,58 @@ export async function refreshCandidatePool(candidates: StockCandidate[], refresh
   const refreshCodes = candidates.slice(0, Math.max(0, refreshLimit)).map((candidate) => candidate.code);
   if (!refreshCodes.length) return candidates;
 
-  const [stockQuotes, stockKlines, stockTechnicals, stockFundFlows, westockCompanyKnowledge] = await Promise.all([
-    eastmoneyAdapter.getStockQuotes(refreshCodes, { timeoutMs: 30000, retries: 1 }).catch((error) => {
-      warnings.push(`选股候选池最新盘口刷新失败：${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    }),
-    westockAdapter.getStockKlines(refreshCodes, 30, { timeoutMs: 120000, retries: 1 }).catch((error) => {
-      warnings.push(`选股候选池K线刷新失败：${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    }),
-    westockAdapter.getStockTechnicals(refreshCodes, { timeoutMs: 120000, retries: 1 }).catch((error) => {
-      warnings.push(`选股候选池技术指标刷新失败：${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    }),
-    westockAdapter.getStockFundFlows(refreshCodes, { timeoutMs: 120000, retries: 1 }).catch((error) => {
-      warnings.push(`选股候选池资金流刷新失败：${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    }),
-    fetchWestockCompanySupplement(refreshCodes, warnings)
-  ]);
-  const companyProfiles = await mapLimit(refreshCodes, 10, async (code) => {
-    const profile = await eastmoneyAdapter.getCompanyProfile(code, { timeoutMs: 30000, retries: 1 }).catch((error) => ({
-      data: null,
-      warnings: [`选股候选池公司概况刷新失败：${code} ${error instanceof Error ? error.message : String(error)}`]
-    }));
-    return { code, profile };
-  });
-
-  warnings.push(
-    `运行前刷新候选池 ${refreshCodes.length} 只：最新盘口 ${stockQuotes?.data?.length ?? 0}/${refreshCodes.length}，K线 ${stockKlines?.status ?? "failed"}，技术 ${stockTechnicals?.status ?? "failed"}，资金 ${stockFundFlows?.status ?? "failed"}。`
-  );
-  const profileSuccessCount = companyProfiles.filter((item) => item.profile.data).length;
-  warnings.push(`运行前补充公司概况 ${profileSuccessCount}/${refreshCodes.length} 只；补不到主营业务的股票仍会保留数据不足或低置信约束。`);
-  if (westockCompanyKnowledge) {
-    warnings.push(
-      `运行前补充财务层数据：profile ${westockCompanyKnowledge.profiles?.status ?? "failed"}，lrb ${westockCompanyKnowledge.income?.status ?? "failed"}，zcfz ${westockCompanyKnowledge.balance?.status ?? "failed"}，xjll ${westockCompanyKnowledge.cashFlow?.status ?? "failed"}，shareholder ${westockCompanyKnowledge.shareholders?.status ?? "failed"}，reserve ${westockCompanyKnowledge.reserves?.status ?? "failed"}。`
-    );
-  }
+  const hydration = await candidateDataHydrator.hydrateRuntime(refreshCodes, warnings);
+  warnings.push(...hydration.notes);
   if (candidates.length > refreshCodes.length) {
     warnings.push(`本轮仅使用已刷新前排 ${refreshCodes.length}/${candidates.length} 只参与评分；未刷新股票留在候选沉淀池，不进入本次输出。`);
   }
-  warnings.push(
-    ...(stockQuotes?.warnings ?? []),
-    ...(stockKlines?.warnings ?? []),
-    ...(stockTechnicals?.warnings ?? []),
-    ...(stockFundFlows?.warnings ?? []),
-    ...companyProfiles.flatMap((item) => item.profile.warnings ?? [])
-  );
-
-  const quoteRows = new Map((stockQuotes?.data ?? []).map((quote) => [normalizeStockCode(quote.marketCode || quote.code), quote]));
-  const klineRows = rowMap(stockKlines, "symbol");
-  const technicalRows = rowMap(stockTechnicals);
-  const fundRows = rowMap(stockFundFlows);
-  const westockProfileRows = rowMap(westockCompanyKnowledge?.profiles);
-  const incomeRows = rowsByCode(westockCompanyKnowledge?.income, "SecuCode");
-  const balanceRows = rowsByCode(westockCompanyKnowledge?.balance, "SecuCode");
-  const cashFlowRows = rowsByCode(westockCompanyKnowledge?.cashFlow, "SecuCode");
-  const shareholderRows = buildShareholderMap(westockCompanyKnowledge?.shareholders, refreshCodes);
-  const reserveRows = latestRowsByCode(westockCompanyKnowledge?.reserves, "code");
-  const profileRows = new Map(companyProfiles
-    .filter((item) => item.profile.data)
-    .map((item) => [normalizeStockCode(item.code), item.profile.data]));
+  const {
+    refreshedAt,
+    realtimeSnapshots,
+    maps: {
+      quoteRows,
+      klineRows,
+      technicalRows,
+      fundRows,
+      westockProfileRows,
+      incomeRows,
+      balanceRows,
+      cashFlowRows,
+      shareholderRows,
+      reserveRows,
+      profileRows
+    }
+  } = hydration;
 
   return candidates.slice(0, refreshCodes.length).map((candidate) => {
-    const quoteRow = quoteRows.get(normalizeStockCode(candidate.code));
+    const normalizedCode = normalizeStockCode(candidate.code);
+    const snapshot = realtimeSnapshots[normalizedCode];
+    const quoteRow = quoteRows.get(normalizedCode);
     const profileRow = profileRows.get(normalizeStockCode(candidate.code));
     const westockProfile = westockProfileRows.get(candidate.code) ?? westockProfileRows.get(normalizeStockCode(candidate.code));
-    const technical = parseTechnical(technicalRows.get(candidate.code)) ?? candidate.technical;
-    const fundFlow = parseFundFlow(fundRows.get(candidate.code)) ?? candidate.fundFlow;
+    const technical = snapshot?.technical ?? parseTechnical(technicalRows.get(candidate.code)) ?? candidate.technical;
+    const fundFlow = snapshot?.fundFlow ?? parseFundFlow(fundRows.get(candidate.code)) ?? candidate.fundFlow;
     const fundFlowQuality = fundFlow ? evaluateFundFlowQuality(fundFlow) : candidate.fundFlowQuality;
-    const fundFlowState = fundFlow ? inferFundFlow(fundFlow, fundFlowQuality) : candidate.fundFlowState;
-    const klineSummary = buildKlineSummary(klineRows.get(candidate.code), technical) ?? candidate.klineSummary;
-    const latest = quoteRow?.latest ?? klineSummary?.latestClose ?? technical?.closePrice ?? candidate.price ?? candidate.quote?.latest;
-    const changePct = quoteRow?.changePct ?? candidate.quote?.changePct;
+    const fundFlowState = snapshot?.fundFlowState ?? (fundFlow ? inferFundFlow(fundFlow, fundFlowQuality) : candidate.fundFlowState);
+    const klineSummary = buildKlineSummaryFromSnapshot(snapshot, candidate)
+      ?? buildKlineSummary(klineRows.get(candidate.code), technical)
+      ?? candidate.klineSummary;
+    const latest = snapshot?.latestPrice ?? quoteRow?.latest ?? klineSummary?.latestClose ?? technical?.closePrice ?? candidate.price ?? candidate.quote?.latest;
+    const changePct = snapshot?.changePct ?? quoteRow?.changePct ?? candidate.quote?.changePct;
     const quote = {
       ...candidate.quote,
       latest,
       changePct,
-      amount: quoteRow?.amount ?? candidate.quote?.amount,
+      amount: snapshot?.amount ?? quoteRow?.amount ?? candidate.quote?.amount,
       volume: quoteRow?.volume ?? candidate.quote?.volume,
-      turnoverRate: quoteRow?.turnoverRate ?? candidate.quote?.turnoverRate,
+      turnoverRate: snapshot?.turnoverRate ?? quoteRow?.turnoverRate ?? candidate.quote?.turnoverRate,
       peTtm: quoteRow?.peDynamic ?? candidate.quote?.peTtm,
       pb: quoteRow?.pb ?? candidate.quote?.pb,
-      mainNetInflow: quoteRow?.mainNetInflow ?? fundFlow?.mainNetFlow ?? candidate.quote?.mainNetInflow,
-      floatMarketValue: quoteRow?.floatMarketValue ?? candidate.quote?.floatMarketValue
+      mainNetInflow: snapshot?.mainNetInflow ?? quoteRow?.mainNetInflow ?? fundFlow?.mainNetFlow ?? candidate.quote?.mainNetInflow,
+      floatMarketValue: quoteRow?.floatMarketValue ?? candidate.quote?.floatMarketValue,
+      fetchedAt: snapshot?.fetchedAt ?? (quoteRow ? refreshedAt : candidate.quote?.fetchedAt),
+      quoteUpdatedAt: snapshot?.quoteUpdatedAt ?? snapshot?.raw?.quoteUpdatedAt ?? candidate.quote?.quoteUpdatedAt,
+      source: snapshot ? `unified-stock-snapshot:${snapshot.source}` : quoteRow ? "eastmoney.runtime_quote" : candidate.quote?.source
     };
     const tradability = evaluateTradability(changePct);
     const companyKnowledge = buildRefreshedCompanyKnowledge(candidate, westockProfile, profileRow ?? undefined, {
@@ -221,7 +188,7 @@ export async function refreshCandidatePool(candidates: StockCandidate[], refresh
       tradability
     });
     const dataCompleteness = buildCompleteness(
-      quoteRow ? true : candidate.dataCompleteness.hasHotData,
+      snapshot?.coverage.quote || quoteRow ? true : candidate.dataCompleteness.hasHotData,
       Boolean(klineSummary),
       Boolean(technical),
       Boolean(fundFlow),
@@ -250,6 +217,15 @@ export async function refreshCandidatePool(candidates: StockCandidate[], refresh
         ...(companyKnowledge.shareholderSummary ? [`company.${candidate.code}.shareholder.summary`] : []),
         ...(companyKnowledge.mainBusiness && companyKnowledge.companyKnowledgeState !== "missing" ? [`company.${candidate.code}.business`] : [])
       ]),
+      sourceTraces: buildSelectionRefreshTraces(candidate, {
+        refreshedAt,
+        snapshot,
+        quote: Boolean(snapshot?.coverage.quote || quoteRow),
+        kline: Boolean(snapshot?.coverage.kline || (klineSummary && klineSummary !== candidate.klineSummary)),
+        technical: Boolean(snapshot?.coverage.technical || (technical && technical !== candidate.technical)),
+        fundFlow: Boolean(snapshot?.coverage.fundFlow || (fundFlow && fundFlow !== candidate.fundFlow)),
+        company: Boolean(profileRow || westockProfile || companyKnowledge.financialSummary || companyKnowledge.shareholderSummary)
+      }),
       riskFlags: [
         ...candidate.riskFlags.filter((flag) => !/缺少资金流|缺少K线|缺少技术指标|涨跌幅缺失|盘口/.test(flag)),
         ...(fundFlowQuality?.blockers ?? [])
@@ -258,12 +234,10 @@ export async function refreshCandidatePool(candidates: StockCandidate[], refresh
   });
 }
 
-type CompanyProfileResult = NonNullable<Awaited<ReturnType<typeof eastmoneyAdapter.getCompanyProfile>>["data"]>;
-
 function buildRefreshedCompanyKnowledge(
   candidate: StockCandidate,
   westockProfile: Record<string, unknown> | undefined,
-  profile: CompanyProfileResult | undefined,
+  profile: CandidateCompanyProfileResult | undefined,
   supplement: {
     incomeHistory?: Record<string, unknown>[];
     balanceHistory?: Record<string, unknown>[];
@@ -295,7 +269,7 @@ function buildRefreshedCompanyKnowledge(
   return profile ? mergeCompanyKnowledge(candidate, profile) : candidate.companyKnowledge;
 }
 
-function mergeCompanyKnowledge(candidate: StockCandidate, profile: CompanyProfileResult) {
+function mergeCompanyKnowledge(candidate: StockCandidate, profile: CandidateCompanyProfileResult) {
   const business = profile.business || profile.businessScope || profile.orgProfile || candidate.companyKnowledge.mainBusiness;
   const industry = profile.industry || candidate.companyKnowledge.industry;
   const hasBusiness = Boolean(profile.business || profile.businessScope || profile.orgProfile);
@@ -325,41 +299,148 @@ function uniqueEvidenceRefs(refs: string[]) {
   return Array.from(new Set(refs.filter(Boolean))).slice(0, 20);
 }
 
-async function fetchWestockCompanySupplement(codes: string[], warnings: string[]) {
-  const codeList = codes.join(",");
-  const runSafe = async (label: string, command: Parameters<typeof westockAdapter.run>[0], args: string[]) => {
-    const result = await westockAdapter.run(command, args, { timeoutMs: 180000, retries: 1 }).catch((error) => {
-      warnings.push(`选股候选池 ${label} 补数失败：${error instanceof Error ? error.message : String(error)}`);
-      return null;
-    });
-    if (result?.warnings?.length) {
-      warnings.push(...result.warnings.map((warning) => `${label}: ${warning}`));
-    }
-    return result;
+function buildKlineSummaryFromSnapshot(snapshot: StockRealtimeSnapshot | undefined, candidate: StockCandidate): StockCandidate["klineSummary"] | undefined {
+  if (!snapshot?.technical && !snapshot?.latestPrice) return undefined;
+  const technical = snapshot.technical;
+  return {
+    period: "day",
+    limit: 80,
+    latestClose: snapshot.latestPrice ?? technical?.closePrice,
+    maDistance: technical?.closePrice
+      ? {
+          ma5: distancePct(technical.closePrice, technical.ma5),
+          ma10: distancePct(technical.closePrice, technical.ma10),
+          ma20: distancePct(technical.closePrice, technical.ma20),
+          ma60: distancePct(technical.closePrice, technical.ma60)
+        }
+      : candidate.klineSummary?.maDistance,
+    trend: snapshot.trendState ?? candidate.klineSummary?.trend ?? candidate.trendState,
+    volumePrice: `统一快照：成交额 ${snapshot.amount ?? "缺失"}，换手 ${snapshot.turnoverRate ?? "缺失"}，质量 ${snapshot.qualityLabel}`
   };
-
-  const [profiles, income, balance, cashFlow, shareholders, reserves] = await Promise.all([
-    runSafe("profile", "profile", [codeList]),
-    runSafe("finance/lrb", "finance", [codeList, "--type", "lrb", "--num", "4"]),
-    runSafe("finance/zcfz", "finance", [codeList, "--type", "zcfz", "--num", "4"]),
-    runSafe("finance/xjll", "finance", [codeList, "--type", "xjll", "--num", "4"]),
-    runSafe("shareholder", "shareholder", [codeList]),
-    runSafe("reserve", "reserve", [codeList])
-  ]);
-
-  return { profiles, income, balance, cashFlow, shareholders, reserves };
 }
 
-async function mapLimit<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>) {
-  const results: R[] = [];
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await worker(items[index]);
+function buildSelectionRefreshTraces(
+  candidate: StockCandidate,
+  refreshed: {
+    refreshedAt: string;
+    snapshot?: StockRealtimeSnapshot;
+    quote: boolean;
+    kline: boolean;
+    technical: boolean;
+    fundFlow: boolean;
+    company: boolean;
+  }
+) {
+  return [
+    ...(candidate.sourceTraces ?? []),
+    {
+      id: `selection.runtime.unifiedSnapshot.${candidate.code}`,
+      scope: "stock" as const,
+      subjectCode: candidate.code,
+      subjectName: candidate.name,
+      field: "selection.runtime.unifiedSnapshot",
+      provider: "eastmoney_public" as const,
+      providerName: "统一个股快照（东方财富报价 + westock/Tushare 兜底）",
+      accessPath: "fetchStockRealtimeSnapshots",
+      sourceLabel: "运行前统一快照刷新",
+      fetchedAt: refreshed.snapshot?.fetchedAt,
+      quality: refreshed.snapshot && refreshed.snapshot.quality !== "missing" ? "primary" as const : "missing" as const,
+      freshness: refreshed.snapshot?.quoteUpdatedAt ? "delayed" as const : "unknown" as const,
+      metadata: refreshed.snapshot
+        ? {
+            latestKlineDate: refreshed.snapshot.raw?.latestKlineDate,
+            expectedKlineDate: refreshed.snapshot.raw?.expectedKlineDate,
+            klineFreshnessStatus: refreshed.snapshot.raw?.klineFreshnessStatus,
+            klineClose: refreshed.snapshot.technical?.closePrice,
+            quoteUpdatedAt: refreshed.snapshot.quoteUpdatedAt ?? refreshed.snapshot.raw?.quoteUpdatedAt
+          }
+        : undefined,
+      warning: refreshed.snapshot
+        ? refreshed.snapshot.warnings.slice(0, 2).join("；") || undefined
+        : "本次选股运行前未取得统一行情快照，保留旧链路补数结果。"
+    },
+    {
+      id: `selection.runtime.quote.${candidate.code}`,
+      scope: "stock" as const,
+      subjectCode: candidate.code,
+      subjectName: candidate.name,
+      field: "selection.runtime.quote",
+      provider: "eastmoney_public" as const,
+      providerName: "东方财富公开行情",
+      accessPath: "eastmoneyAdapter.getStockQuotes",
+      sourceLabel: "运行前盘口刷新",
+      fetchedAt: refreshed.quote ? refreshed.refreshedAt : undefined,
+      quality: refreshed.quote ? "primary" as const : "missing" as const,
+      freshness: refreshed.quote ? "delayed" as const : "unknown" as const,
+      warning: refreshed.quote ? undefined : "本次选股运行前未取得最新盘口，保留报告快照。"
+    },
+    {
+      id: `selection.runtime.kline.${candidate.code}`,
+      scope: "stock" as const,
+      subjectCode: candidate.code,
+      subjectName: candidate.name,
+      field: "selection.runtime.kline",
+      provider: "tencent_zixuangu" as const,
+      providerName: "腾讯自选股行情数据接口",
+      accessPath: "westockAdapter.getStockKlines",
+      sourceLabel: "运行前K线刷新",
+      fetchedAt: refreshed.kline ? refreshed.refreshedAt : undefined,
+      quality: refreshed.kline ? "primary" as const : "missing" as const,
+      freshness: refreshed.kline ? "delayed" as const : "unknown" as const,
+      metadata: refreshed.snapshot
+        ? {
+            latestKlineDate: refreshed.snapshot.raw?.latestKlineDate,
+            expectedKlineDate: refreshed.snapshot.raw?.expectedKlineDate,
+            klineFreshnessStatus: refreshed.snapshot.raw?.klineFreshnessStatus,
+            klineClose: refreshed.snapshot.technical?.closePrice
+          }
+        : undefined,
+      warning: refreshed.kline ? undefined : "本次选股运行前未取得最新K线，保留报告快照。"
+    },
+    {
+      id: `selection.runtime.technical.${candidate.code}`,
+      scope: "stock" as const,
+      subjectCode: candidate.code,
+      subjectName: candidate.name,
+      field: "selection.runtime.technical",
+      provider: "tencent_zixuangu" as const,
+      providerName: "腾讯自选股行情数据接口",
+      accessPath: "westockAdapter.getStockTechnicals",
+      sourceLabel: "运行前技术指标刷新",
+      fetchedAt: refreshed.technical ? refreshed.refreshedAt : undefined,
+      quality: refreshed.technical ? "primary" as const : "missing" as const,
+      freshness: refreshed.technical ? "delayed" as const : "unknown" as const,
+      warning: refreshed.technical ? undefined : "本次选股运行前未取得最新技术指标，保留报告快照。"
+    },
+    {
+      id: `selection.runtime.fundFlow.${candidate.code}`,
+      scope: "stock" as const,
+      subjectCode: candidate.code,
+      subjectName: candidate.name,
+      field: "selection.runtime.fundFlow",
+      provider: "tencent_zixuangu" as const,
+      providerName: "腾讯自选股行情数据接口",
+      accessPath: "westockAdapter.getStockFundFlows",
+      sourceLabel: "运行前资金流刷新",
+      fetchedAt: refreshed.fundFlow ? refreshed.refreshedAt : undefined,
+      quality: refreshed.fundFlow ? "primary" as const : "missing" as const,
+      freshness: refreshed.fundFlow ? "delayed" as const : "unknown" as const,
+      warning: refreshed.fundFlow ? undefined : "本次选股运行前未取得最新资金流，保留报告快照。"
+    },
+    {
+      id: `selection.runtime.company.${candidate.code}`,
+      scope: "company" as const,
+      subjectCode: candidate.code,
+      subjectName: candidate.name,
+      field: "selection.runtime.company",
+      provider: "eastmoney_public" as const,
+      providerName: "东方财富公开资料 + 腾讯自选股财务",
+      accessPath: "eastmoneyAdapter.getCompanyProfile/westockAdapter.finance",
+      sourceLabel: "运行前公司与财务补数",
+      fetchedAt: refreshed.company ? refreshed.refreshedAt : undefined,
+      quality: refreshed.company ? "primary" as const : "missing" as const,
+      freshness: refreshed.company ? "delayed" as const : "unknown" as const,
+      warning: refreshed.company ? undefined : "本次选股运行前未补齐公司/财务层数据。"
     }
-  });
-  await Promise.all(workers);
-  return results;
+  ];
 }

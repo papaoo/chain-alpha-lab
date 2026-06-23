@@ -1,4 +1,5 @@
 import type { KLineChartsModule, KLineCacheEntry, StockKlinePayload, ChartKLineData, ApiResponse } from "@/components/StockKLineHoverTypes";
+import { fetchApiJson } from "@/lib/client/api";
 
 const KLINE_CACHE_TTL_MS = 30 * 60 * 1000;
 const klineDataCache = new Map<string, KLineCacheEntry>();
@@ -23,13 +24,22 @@ export function loadCachedKLine(code: string, cacheKey: string, forceRefresh: bo
     if (inflight) return inflight;
   }
 
-  const request = fetch(`/api/stocks/${encodeURIComponent(code)}/kline?limit=90${forceRefresh ? "&refresh=1" : ""}`)
-    .then((res) => res.json() as Promise<ApiResponse<StockKlinePayload>>)
+  const request = fetchApiJson<StockKlinePayload>(`/api/stocks/${encodeURIComponent(code)}/kline?limit=90${forceRefresh ? "&refresh=1" : ""}`)
     .then((json) => {
       if (!json.success || !json.data?.klines.length) throw new Error(json.error?.message ?? "真实K线为空");
       const normalized = normalizeKLineData(json.data.klines);
       if (!normalized.length) throw new Error("真实K线字段不完整");
-      const entry = { data: normalized, source: json.data.source, fetchedAt: Date.now() };
+      const entry = {
+        data: normalized,
+        source: json.data.source,
+        fetchedAt: Date.now(),
+        sourceFetchedAt: json.data.fetchedAt,
+        latestTradeDate: json.data.latestTradeDate,
+        expectedTradeDate: json.data.expectedTradeDate,
+        freshnessStatus: json.data.freshnessStatus,
+        freshnessWarning: json.data.freshnessWarning,
+        warnings: json.data.warnings
+      };
       klineDataCache.set(cacheKey, entry);
       return entry;
     })

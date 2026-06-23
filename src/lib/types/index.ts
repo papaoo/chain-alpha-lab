@@ -45,6 +45,8 @@ export interface RuleScoreBreakdownItem {
 
 export interface DataCompleteness {
   level: "complete" | "partial" | "insufficient";
+  coreMarketLevel?: "complete" | "partial" | "insufficient";
+  companyKnowledgeLevel?: "sufficient" | "partial" | "missing";
   hasHotData: boolean;
   hasKlineData: boolean;
   hasTechnicalData: boolean;
@@ -267,7 +269,10 @@ export interface SectorConstituentSnapshot {
   fetchedAt: string;
   name: string;
   boardCode: string;
+  resolvedBoardName?: string;
   boardType: "industry" | "concept";
+  approximateSource?: boolean;
+  sourceWarning?: string;
   stocks: SectorConstituentStock[];
 }
 
@@ -480,6 +485,9 @@ export interface StockCandidate {
     dividendYieldTtm?: number;
     mainNetInflow?: number;
     floatMarketValue?: number;
+    fetchedAt?: string;
+    quoteUpdatedAt?: string;
+    source?: string;
   };
   sectorName: string;
   role: "龙头" | "中军" | "补涨" | "低吸观察" | "unknown";
@@ -706,11 +714,13 @@ export interface DataSourceTrace {
   quality: "primary" | "fallback" | "approximate" | "derived" | "missing";
   freshness: "realtime" | "delayed" | "eod" | "historical" | "unknown";
   warning?: string;
+  metadata?: Record<string, string | number | boolean | null | undefined>;
 }
 
 export interface FactPackage {
   schemaVersion: SchemaVersion;
   timestamp: string;
+  tradeDate?: string;
   session: MarketSessionContext;
   facts: Fact[];
   dataSource: DataSourceStatus;
@@ -936,6 +946,8 @@ export interface SchedulerSettings {
   deepResearchTimes: string[];
   llmOnEvent: boolean;
   pushNotification: boolean;
+  auctionWatchlistPushEnabled: boolean;
+  riskWarningPushEnabled: boolean;
 }
 
 export interface NotificationChannel {

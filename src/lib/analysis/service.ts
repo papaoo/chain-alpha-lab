@@ -9,8 +9,8 @@ import { effectiveTradeDateForSession, inferMarketSessionContext } from "@/lib/m
 import { sendAnalysisNotification } from "@/lib/notifications/service";
 import { buildPremarketSnapshot } from "@/lib/premarket/service";
 import { buildFactPackage } from "@/lib/strategy/rules";
-import { westockAdapter } from "@/lib/westock/adapter";
-import { buildTradingCalendarVerificationWarnings, buildTushareTradingCalendarWarnings, extractCandidateStockCodes, fetchSupplementalMarketData, fetchTushareCandidateMetrics, latestReportPeriod, supplementHotStocksWithEastmoney, supplementHotStocksWithTushare, supplementSectorConstituentsWithTushare, supplementStockFinancialIndicatorsWithTushare, supplementStockFundFlowsWithEastmoney, supplementStockFundFlowsWithTushare, supplementStockKlinesWithEastmoney, supplementStockProfilesWithEastmoney, supplementStockShareholdersWithTushare, supplementStockTechnicalsFromKlines, westockErrorToResult } from "@/lib/analysis/dataPipeline";
+import { analysisInputGateway } from "@/lib/data/analysisInputGateway";
+import { buildTradingCalendarVerificationWarnings, buildTushareTradingCalendarWarnings, extractCandidateStockCodes, fetchSupplementalMarketData, fetchTushareCandidateMetrics, latestReportPeriod, supplementHotStocksWithEastmoney, supplementHotStocksWithTushare, supplementSectorConstituentsWithTushare, supplementStockFinancialIndicatorsWithTushare, supplementStockFundFlowsWithEastmoney, supplementStockFundFlowsWithTushare, supplementStockKlinesWithEastmoney, supplementStockKlinesWithTushare, supplementStockProfilesWithEastmoney, supplementStockShareholdersWithTushare, supplementStockTechnicalsFromKlines } from "@/lib/analysis/dataPipeline";
 import type { AnalysisReport, Fact, FactPackage, StockCandidate, StockMemoryContext } from "@/lib/types";
 import type { ParsedCommandResult } from "@/lib/westock/parser";
 
@@ -42,14 +42,7 @@ export async function runFullAnalysis(options: AnalyzeOptions = {}) {
   const session = inferMarketSessionContext(timestamp);
   const tradeDate = effectiveTradeDateForSession(timestamp, session);
 
-  const marketIndexCodes = ["sh000001", "sz399001", "sz399006", "sh000688"];
-  const [marketKlines, marketTechnicals, boardOverview, hotBoards, rawHotStocks] = await Promise.all([
-    Promise.all(marketIndexCodes.map((code) => westockAdapter.kline(code, 90))),
-    westockAdapter.getStockTechnicals(marketIndexCodes),
-    westockAdapter.getBoardOverview(),
-    westockAdapter.getHotBoards(20),
-    westockAdapter.getHotStocks(50)
-  ]);
+  const { marketKlines, marketTechnicals, boardOverview, hotBoards, rawHotStocks } = await analysisInputGateway.fetchBaseInputs();
   const supplemental = await fetchSupplementalMarketData(boardOverview, timestamp, session, marketKlines);
   supplemental.warnings.push(...await buildTushareTradingCalendarWarnings(timestamp, session));
   supplemental.warnings.push(...buildTradingCalendarVerificationWarnings({
@@ -63,30 +56,30 @@ export async function runFullAnalysis(options: AnalyzeOptions = {}) {
   });
   const hotStocks = await supplementHotStocksWithEastmoney(rawHotStocks, supplemental.warnings);
 
-  const candidateCodes = extractCandidateStockCodes(hotStocks, supplemental.sectorConstituents).slice(0, 80);
+  const candidateCodes = extractCandidateStockCodes(hotStocks, supplemental.sectorConstituents);
   const tushareMetrics = await fetchTushareCandidateMetrics(candidateCodes, tradeDate, supplemental.warnings);
   const enrichedHotStocks = supplementHotStocksWithTushare(hotStocks, tushareMetrics, tradeDate);
   const enrichedSectorConstituents = supplementSectorConstituentsWithTushare(supplemental.sectorConstituents, tushareMetrics);
-  const [rawStockKlines, stockTechnicals, rawStockFundFlows, rawStockProfiles, rawStockIncomeStatements, stockBalanceSheets, stockCashFlows, rawStockShareholders, stockReserves] = candidateCodes.length
-    ? await Promise.all([
-        westockAdapter.getStockKlines(candidateCodes, 30),
-        westockAdapter.getStockTechnicals(candidateCodes),
-        westockAdapter.getStockFundFlows(candidateCodes),
-        westockAdapter.getStockProfiles(candidateCodes),
-        westockAdapter.run("finance", [candidateCodes.join(","), "--type", "lrb", "--num", "4"]).catch((error) => westockErrorToResult("finance:lrb", candidateCodes, error)),
-        westockAdapter.run("finance", [candidateCodes.join(","), "--type", "zcfz", "--num", "4"]).catch((error) => westockErrorToResult("finance:zcfz", candidateCodes, error)),
-        westockAdapter.run("finance", [candidateCodes.join(","), "--type", "xjll", "--num", "4"]).catch((error) => westockErrorToResult("finance:xjll", candidateCodes, error)),
-        westockAdapter.run("shareholder", [candidateCodes.join(",")]).catch((error) => westockErrorToResult("shareholder", candidateCodes, error)),
-        westockAdapter.run("reserve", [candidateCodes.join(",")]).catch((error) => westockErrorToResult("reserve", candidateCodes, error))
-      ])
-    : [null, null, null, null, null, null, null, null, null];
-  const stockKlines = await supplementStockKlinesWithEastmoney(rawStockKlines, candidateCodes, supplemental.warnings);
+  const {
+    rawStockKlines,
+    stockTechnicals,
+    rawStockFundFlows,
+    rawStockProfiles,
+    rawStockIncomeStatements,
+    stockBalanceSheets,
+    stockCashFlows,
+    rawStockShareholders,
+    stockReserves
+  } = await analysisInputGateway.fetchCandidateRawInputs(candidateCodes);
+  const stockKlinesWithEastmoney = await supplementStockKlinesWithEastmoney(rawStockKlines, candidateCodes, supplemental.warnings);
+  const stockKlines = await supplementStockKlinesWithTushare(stockKlinesWithEastmoney, candidateCodes, tradeDate, supplemental.warnings);
   const enrichedStockTechnicals = supplementStockTechnicalsFromKlines(stockTechnicals, stockKlines, candidateCodes, supplemental.warnings);
   const stockFundFlowsWithEastmoney = await supplementStockFundFlowsWithEastmoney(rawStockFundFlows, candidateCodes, supplemental.warnings);
   const stockFundFlows = await supplementStockFundFlowsWithTushare(stockFundFlowsWithEastmoney, candidateCodes, tradeDate, supplemental.warnings);
   const stockProfiles = await supplementStockProfilesWithEastmoney(rawStockProfiles, candidateCodes, supplemental.warnings);
   const stockIncomeStatements = await supplementStockFinancialIndicatorsWithTushare(rawStockIncomeStatements, candidateCodes, latestReportPeriod(tradeDate), supplemental.warnings);
   const stockShareholders = await supplementStockShareholdersWithTushare(rawStockShareholders, candidateCodes, tradeDate, supplemental.warnings);
+  const dataSourceWarnings = compactRepeatedWarnings(supplemental.warnings);
 
   const marketTimeline = getRecentMarketTimelinePoints(10);
   const factPackage = buildFactPackage({
@@ -109,7 +102,7 @@ export async function runFullAnalysis(options: AnalyzeOptions = {}) {
     marketBreadth: supplemental.marketBreadth,
     limitPools: supplemental.limitPools,
     sectorConstituents: enrichedSectorConstituents,
-    supplementalWarnings: supplemental.warnings,
+    supplementalWarnings: dataSourceWarnings,
     marketTimeline,
     session,
     premarket: premarketSnapshot
@@ -131,7 +124,7 @@ export async function runFullAnalysis(options: AnalyzeOptions = {}) {
     stockFundFlows,
     stockProfiles,
     sectorConstituents: enrichedSectorConstituents,
-    warnings: supplemental.warnings
+    warnings: dataSourceWarnings
   });
   attachMarketContext(factPackage);
   attachStockMemories(factPackage);
@@ -214,6 +207,21 @@ function hotStocksContainsTushare(hotStocks: ParsedCommandResult) {
     section.type === "markdownTable" &&
     section.rows.some((row) => String(row.source ?? "").includes("tushare"))
   );
+}
+
+function compactRepeatedWarnings(warnings: string[]) {
+  const counts = new Map<string, number>();
+  const order: string[] = [];
+  for (const warning of warnings) {
+    const normalized = warning.replace(/\s+/g, " ").trim();
+    if (!normalized) continue;
+    if (!counts.has(normalized)) order.push(normalized);
+    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+  }
+  return order.map((warning) => {
+    const count = counts.get(warning) ?? 1;
+    return count > 1 ? `${warning}（重复 ${count} 次）` : warning;
+  });
 }
 
 export async function runModelAnalysisFromReport(reportId: string, options: Pick<AnalyzeOptions, "pushNotification"> = {}) {

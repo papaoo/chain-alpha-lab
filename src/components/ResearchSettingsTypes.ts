@@ -60,6 +60,23 @@ export type SchedulerForm = {
   deepResearchTimes: string;
   llmOnEvent: boolean;
   pushNotification: boolean;
+  auctionWatchlistPushEnabled: boolean;
+  riskWarningPushEnabled: boolean;
+};
+
+export type SchedulerDecisionPreview = {
+  checkedAt: string;
+  mode: string;
+  decision: {
+    shouldRun: boolean;
+    jobType: string;
+    useLLM: boolean;
+    pushNotification: boolean;
+    llmOnEvent: boolean;
+    auctionWatchlistPush: boolean;
+    riskWarningPush: boolean;
+    reason: string;
+  };
 };
 
 export type DatabaseStatsSummary = {
@@ -73,6 +90,24 @@ export type DatabaseStatsSummary = {
     rowCount: number;
     latestAt?: string | null;
   }>;
+};
+
+export type ReportSummaryMaintenanceStatus = {
+  generatedAt: string;
+  fullReportCount: number;
+  summaryCount: number;
+  missingCount: number;
+  coveragePct: number;
+  latestReportAt?: string | null;
+  latestSummaryAt?: string | null;
+};
+
+export type ReportSummaryBackfillResult = {
+  scanned: number;
+  created: number;
+  skippedInvalid: number;
+  remainingMissing: number;
+  elapsedMs: number;
 };
 
 export type DatabaseRuntimeInfo = {
@@ -104,6 +139,31 @@ export type DatabaseRuntimeInfo = {
     status: "ready" | "partial" | "blocked";
     note: string;
   }>;
+};
+
+export type DatabaseReconciliationBaseline = {
+  provider: "sqlite";
+  generatedAt: string;
+  configuredTargetProvider: string;
+  status: "ready" | "caution" | "blocked";
+  label: string;
+  baselineHash: string;
+  tableChecks: Array<{
+    table: string;
+    rowCount: number;
+    latestAt?: string | null;
+  }>;
+  jsonChecks: Array<{
+    table: string;
+    column: string;
+    checkedRows: number;
+    totalNonEmptyRows: number;
+    invalidRows: number;
+    status: "ok" | "warning" | "failed";
+  }>;
+  blockers: string[];
+  warnings: string[];
+  nextSteps: string[];
 };
 
 export type DatabaseAuditReport = {

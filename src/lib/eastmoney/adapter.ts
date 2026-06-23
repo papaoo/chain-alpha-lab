@@ -70,6 +70,7 @@ interface RawQuote {
   f170?: number | string;
   f171?: number | string;
   f62?: number | string;
+  f86?: number | string;
   f100?: string;
 }
 
@@ -94,6 +95,7 @@ export interface EastmoneyQuote {
   pb?: number;
   mainNetInflow?: number;
   industry?: string;
+  updatedAt?: string;
 }
 
 interface EastmoneyKline {
@@ -131,6 +133,12 @@ interface EastmoneyCompanyProfile {
   businessScope?: string;
   orgProfile?: string;
   mainProducts?: string[];
+  businessComposition?: Array<{
+    itemName: string;
+    ratio?: number;
+    reportDate?: string;
+    type?: string;
+  }>;
 }
 
 interface RawF10Survey {
@@ -272,6 +280,18 @@ export class EastmoneyAdapter {
           .filter((item): item is string => Boolean(item))
           .slice(0, 5)
       : [];
+    const businessComposition = business.ok
+      ? (business.json.zygcfx ?? [])
+          .filter((item) => item.ITEM_NAME)
+          .sort((left, right) => (right.MBI_RATIO ?? 0) - (left.MBI_RATIO ?? 0))
+          .map((item) => ({
+            itemName: item.ITEM_NAME!,
+            ratio: businessCompositionRatio(item.MBI_RATIO),
+            reportDate: item.REPORT_DATE,
+            type: item.MAINOP_TYPE
+          }))
+          .slice(0, 12)
+      : [];
     const normalizedCode = normalizeMarketCode(code);
     const data = {
       code: normalizedCode,
@@ -281,7 +301,8 @@ export class EastmoneyAdapter {
       business: products.length ? products.join("、") : scope?.BUSINESS_SCOPE ?? base?.ORG_PROFILE,
       businessScope: scope?.BUSINESS_SCOPE,
       orgProfile: base?.ORG_PROFILE,
-      mainProducts: products
+      mainProducts: products,
+      businessComposition
     };
     return {
       data: data.business || data.industry ? data : null,
@@ -423,7 +444,10 @@ export class EastmoneyAdapter {
         fetchedAt: new Date().toISOString(),
         name,
         boardCode: resolved.data.code,
+        resolvedBoardName: resolved.data.name,
         boardType: type,
+        approximateSource: resolved.warnings.length > 0,
+        sourceWarning: resolved.warnings[0],
         stocks
       }
     };
@@ -447,10 +471,10 @@ export class EastmoneyAdapter {
       fields: "f12,f14"
     }, options, 80);
     if (!fetched.ok) return { data: null, warnings: [fetched.warning], sourceUrl: fetched.sourceUrl };
-    const match = findBoardMatch(fetched.records, nameOrCode);
+    const match = findBoardMatch(fetched.records, nameOrCode, { allowFuzzy: true });
     if (match?.f12) return { data: { code: match.f12, name: match.f14 ?? nameOrCode }, warnings: [], sourceUrl: fetched.sourceUrl };
     for (const alias of boardAliases(nameOrCode, type)) {
-      const aliasMatch = findBoardMatch(fetched.records, alias);
+      const aliasMatch = findBoardMatch(fetched.records, alias, { allowFuzzy: false });
       if (aliasMatch?.f12) {
         return {
           data: { code: aliasMatch.f12, name: aliasMatch.f14 ?? alias },
@@ -464,11 +488,13 @@ export class EastmoneyAdapter {
   }
 }
 
-function findBoardMatch(records: RawBoard[], nameOrCode: string) {
+function findBoardMatch(records: RawBoard[], nameOrCode: string, options: { allowFuzzy: boolean }) {
   const normalizedName = cleanSectorName(nameOrCode);
-  return records.find((record) => record.f14 === nameOrCode)
-    ?? records.find((record) => cleanSectorName(record.f14 ?? "") === normalizedName)
-    ?? records.find((record) => cleanSectorName(record.f14 ?? "").includes(normalizedName))
+  const exact = records.find((record) => record.f14 === nameOrCode)
+    ?? records.find((record) => cleanSectorName(record.f14 ?? "") === normalizedName);
+  if (exact) return exact;
+  if (!options.allowFuzzy && normalizedName.length < 3) return undefined;
+  return records.find((record) => cleanSectorName(record.f14 ?? "").includes(normalizedName))
     ?? records.find((record) => normalizedName.includes(cleanSectorName(record.f14 ?? "")) && cleanSectorName(record.f14 ?? "").length >= 3);
 }
 
@@ -489,6 +515,26 @@ function boardAliases(nameOrCode: string, type: BoardType) {
     aliases.push(...(type === "concept"
       ? ["半导体概念", "第三代半导体", "碳化硅", "有机硅概念"]
       : ["半导体材料", "合成树脂", "半导体Ⅱ"]));
+  }
+  if (/金刚石|培育钻石|人造钻石|工业金刚石|超硬材料/.test(normalized)) {
+    aliases.push(...(type === "concept"
+      ? ["培育钻石", "金刚石线", "超硬材料", "工业母机"]
+      : ["磨具磨料", "非金属材料Ⅲ", "非金属材料Ⅱ"]));
+  }
+  if (/有色锆|有色\(锆\)|锆金属|锆材料|锆产业链|锆英砂|氧氯化锆/.test(normalized)) {
+    aliases.push(...(type === "concept"
+      ? ["稀缺资源", "新材料概念", "金属锆", "小金属概念"]
+      : ["小金属", "金属新材料", "工业金属", "有色金属"]));
+  }
+  if (/锗镓|锗|镓|氮化镓/.test(normalized)) {
+    aliases.push(...(type === "concept"
+      ? ["小金属概念", "稀缺资源", "氮化镓", "第三代半导体"]
+      : ["小金属", "其他小金属", "金属新材料", "有色金属"]));
+  }
+  if (/有色铋|有色\(铋\)|铋金属|铋材料|铋产业链/.test(normalized)) {
+    aliases.push(...(type === "concept"
+      ? ["小金属概念", "稀缺资源", "新材料概念"]
+      : ["小金属", "其他小金属", "工业金属", "有色金属"]));
   }
   if (/物理AI|具身智能|人形机器人/.test(normalized)) {
     aliases.push(...(type === "concept"
@@ -565,7 +611,7 @@ async function fetchStockQuote(secid: string, options: EastmoneyOptions) {
     fltt: 2,
     invt: 2,
     secid,
-    fields: "f43,f44,f45,f46,f47,f48,f57,f58,f60,f107,f116,f117,f127,f162,f167,f168,f169,f170,f171"
+    fields: "f43,f44,f45,f46,f47,f48,f57,f58,f60,f86,f107,f116,f117,f127,f162,f167,f168,f169,f170,f171"
   };
   let lastWarning = "";
   for (const url of STOCK_GET_URLS) {
@@ -608,6 +654,12 @@ function numberValue(value: unknown) {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function businessCompositionRatio(value: unknown) {
+  const parsed = numberValue(value);
+  if (parsed === undefined) return undefined;
+  return parsed >= 0 && parsed <= 1 ? Number((parsed * 100).toFixed(4)) : parsed;
 }
 
 function isNumber(value: unknown): value is number {
@@ -664,7 +716,8 @@ function toQuote(record: RawQuote): EastmoneyQuote {
     floatMarketValue: numberValue(record.f21),
     pb: numberValue(record.f23),
     mainNetInflow: numberValue(record.f62),
-    industry: typeof record.f100 === "string" ? record.f100 : undefined
+    industry: typeof record.f100 === "string" ? record.f100 : undefined,
+    updatedAt: eastmoneyTimestampToIso(record.f86)
   };
 }
 
@@ -689,8 +742,17 @@ function toQuoteFromStockGet(record: RawQuote): EastmoneyQuote {
     pb: numberValue(record.f167),
     turnoverRate: numberValue(record.f168),
     amplitude: numberValue(record.f171),
-    industry: typeof record.f127 === "string" ? record.f127 : undefined
+    industry: typeof record.f127 === "string" ? record.f127 : undefined,
+    updatedAt: eastmoneyTimestampToIso(record.f86)
   };
+}
+
+function eastmoneyTimestampToIso(value: unknown) {
+  const number = numberValue(value);
+  if (number === undefined || number <= 0) return undefined;
+  const milliseconds = number > 9_999_999_999 ? number : number * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function parseKline(raw: string): EastmoneyKline | undefined {

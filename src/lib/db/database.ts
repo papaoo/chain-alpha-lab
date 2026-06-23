@@ -258,6 +258,9 @@ function migrate(database: Database.Database) {
     create index if not exists idx_stock_tracking_snapshots_tracking_created
       on stock_tracking_snapshots(trackingId, createdAt desc);
 
+    create index if not exists idx_stock_tracking_snapshots_tracking_price_created
+      on stock_tracking_snapshots(trackingId, latestPrice, createdAt desc);
+
     create table if not exists stock_tracking_events (
       id text primary key,
       trackingId text not null,
@@ -336,6 +339,9 @@ function migrate(database: Database.Database) {
     create index if not exists idx_selection_runs_strategy_started
       on selection_runs(strategyId, startedAt desc);
 
+    create index if not exists idx_selection_runs_status_started
+      on selection_runs(status, startedAt desc);
+
     create table if not exists serenity_research_runs (
       id text primary key,
       theme text not null,
@@ -372,13 +378,35 @@ function migrate(database: Database.Database) {
   ensureColumn(database, "selection_runs", "ruleVersion", "text");
   ensureColumn(database, "selection_runs", "rejectedCount", "integer");
   ensureColumn(database, "selection_runs", "topPickPreviewJson", "text");
+  ensureColumn(database, "selection_runs", "sourceReportCreatedAt", "text");
+  ensureColumn(database, "selection_runs", "sourceReportTradeDate", "text");
+  ensureColumn(database, "selection_runs", "runEffectiveTradeDate", "text");
+  ensureColumn(database, "selection_runs", "freshnessStatus", "text");
   ensureColumn(database, "model_audit_feedback", "itemCount", "integer");
   ensureColumn(database, "model_audit_feedback", "highPriorityCount", "integer");
   ensureColumn(database, "model_audit_feedback", "categorySummaryJson", "text");
   database.exec(`
     create index if not exists idx_analysis_reports_displayable_created
       on analysis_reports(displayable, createdAt desc);
+
+    create table if not exists analysis_report_summaries (
+      reportId text primary key,
+      reportType text not null,
+      createdAt text not null,
+      displayable integer not null default 1,
+      marketState text,
+      maxTotalPositionPct real,
+      providerSummaryJson text not null,
+      warningSummaryJson text not null,
+      candidateSummaryJson text not null,
+      createdSummaryAt text not null
+    );
+
+    create index if not exists idx_analysis_report_summaries_type_created
+      on analysis_report_summaries(reportType, createdAt desc);
   `);
+  ensureColumn(database, "analysis_report_summaries", "marketState", "text");
+  ensureColumn(database, "analysis_report_summaries", "maxTotalPositionPct", "real");
   backfillAnalysisReportDisplayable(database);
   backfillSelectionRunSummaries(database);
   backfillModelAuditSummaries(database);
@@ -423,7 +451,7 @@ function isDisplayableFactPackageJson(raw: string) {
 
 function backfillSelectionRunSummaries(database: Database.Database) {
   const rows = database
-    .prepare("select id, candidateCount, pickCount, resultJson, rejectedCount, topPickPreviewJson from selection_runs where rejectedCount is null or topPickPreviewJson is null")
+    .prepare("select id, candidateCount, pickCount, resultJson, rejectedCount, topPickPreviewJson, sourceReportCreatedAt, sourceReportTradeDate, runEffectiveTradeDate, freshnessStatus from selection_runs where rejectedCount is null or topPickPreviewJson is null or sourceReportCreatedAt is null or sourceReportTradeDate is null or runEffectiveTradeDate is null or freshnessStatus is null")
     .all() as Array<{
       id: string;
       candidateCount: number;
@@ -431,10 +459,14 @@ function backfillSelectionRunSummaries(database: Database.Database) {
       resultJson: string | null;
       rejectedCount: number | null;
       topPickPreviewJson: string | null;
+      sourceReportCreatedAt: string | null;
+      sourceReportTradeDate: string | null;
+      runEffectiveTradeDate: string | null;
+      freshnessStatus: string | null;
     }>;
   if (!rows.length) return;
 
-  const update = database.prepare("update selection_runs set rejectedCount = ?, topPickPreviewJson = ? where id = ?");
+  const update = database.prepare("update selection_runs set rejectedCount = ?, topPickPreviewJson = ?, sourceReportCreatedAt = ?, sourceReportTradeDate = ?, runEffectiveTradeDate = ?, freshnessStatus = ? where id = ?");
   database.transaction(() => {
     for (const row of rows) {
       const result = safeSelectionRunResult(row.resultJson);
@@ -446,7 +478,15 @@ function backfillSelectionRunSummaries(database: Database.Database) {
         tier: pick.tier,
         action: pick.action
       }));
-      update.run(rejectedCount, JSON.stringify(topPickPreview), row.id);
+      update.run(
+        rejectedCount,
+        JSON.stringify(topPickPreview),
+        row.sourceReportCreatedAt ?? result?.sourceReportCreatedAt ?? null,
+        row.sourceReportTradeDate ?? result?.sourceReportTradeDate ?? null,
+        row.runEffectiveTradeDate ?? result?.runEffectiveTradeDate ?? null,
+        row.freshnessStatus ?? result?.freshnessStatus ?? null,
+        row.id
+      );
     }
   })();
 }
@@ -476,6 +516,10 @@ function safeSelectionRunResult(raw: string | null) {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as {
+      sourceReportCreatedAt?: string;
+      sourceReportTradeDate?: string;
+      runEffectiveTradeDate?: string;
+      freshnessStatus?: string;
       picks?: Array<{ code: string; name: string; score: number; tier: string; action: string }>;
       rejected?: unknown[];
     };

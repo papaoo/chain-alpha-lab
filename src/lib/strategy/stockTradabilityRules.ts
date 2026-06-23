@@ -139,8 +139,29 @@ export function decideCandidateAction(input: {
     }
     return ZH.observe;
   }
-  if (input.buyPointType === ZH.breakoutPullback) return ZH.waitPullback;
+  if (input.buyPointType === ZH.breakoutPullback) {
+    return breakoutPullbackAllowsTrial(input) ? ZH.smallTrial : ZH.waitPullback;
+  }
   return ZH.observe;
+}
+
+function breakoutPullbackAllowsTrial(input: {
+  marketState: MarketRuleResult["marketState"];
+  sectorStage?: SectorRuleResult["stage"];
+  role: StockCandidate["role"];
+  strengthScore: number;
+  tradability: NonNullable<StockCandidate["tradability"]>;
+}) {
+  const coreRole = input.role === ZH.leader || input.role === ZH.core;
+  if (!coreRole) return false;
+  if (input.tradability.status !== "可买入观察") return false;
+  if (input.marketState === "tradable" && (input.sectorStage === ZH.startup || input.sectorStage === ZH.confirmed) && input.strengthScore >= 76) {
+    return true;
+  }
+  if (input.marketState === "cautious" && input.sectorStage === ZH.confirmed && input.strengthScore >= 82) {
+    return true;
+  }
+  return false;
 }
 
 export function positionLimitForAction(action: StockCandidate["action"], market: MarketRuleResult, sectorDiverging: boolean) {

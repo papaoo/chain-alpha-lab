@@ -181,21 +181,46 @@ function buildPremarketOverlay(session?: MarketSessionContext, premarket?: Prema
   if (!premarket) return inactive;
 
   const active = session?.phase === "premarket" || session?.phase === "call_auction";
+  const actionable = premarket.actionability?.level ?? "degraded_reference";
+  const reliability = premarket.temperatureReliability;
+  const reliabilityLevel = reliability?.level ?? "low";
+  const temperatureCanConstrainRules =
+    active &&
+    actionable === "plan_ready" &&
+    (reliabilityLevel === "high" || reliabilityLevel === "medium");
   const bucketScore = Math.max(0, Math.min(10, Math.round(premarket.temperature / 10)));
   const severe = premarket.riskLevel === "risk" || premarket.riskLevel === "risk_off";
   const scorePenalty =
-    active && premarket.riskLevel === "risk_off" ? 8 :
-    active && premarket.riskLevel === "risk" ? 6 :
-    active && premarket.riskLevel === "watch" ? 3 :
+    temperatureCanConstrainRules && premarket.riskLevel === "risk_off" ? 8 :
+    temperatureCanConstrainRules && premarket.riskLevel === "risk" ? 6 :
+    temperatureCanConstrainRules && premarket.riskLevel === "watch" ? 3 :
     0;
-  const stateCap = active && severe ? "cautious" as const : undefined;
+  const stateCap = temperatureCanConstrainRules && severe ? "cautious" as const : undefined;
   const firstFlag = premarket.riskFlags[0] ?? "外围市场未触发明确系统性风险。";
   const modeNote = active
     ? "盘前/竞价阶段生效：只压制开盘前进攻冲动，等待A股开盘宽度、承接和主线核心股确认。"
     : "当前不是盘前/竞价阶段：仅作为背景风险，不改写A股盘面规则结论。";
-  const riskFlags = active && scorePenalty > 0
+  const actionabilityNote = premarket.actionability ? `可行动等级：${premarket.actionability.label}。${premarket.actionability.guidance}` : "";
+  const reliabilityNote = reliability ? `温度置信度：${reliability.label} ${reliability.confidencePct}%。${reliability.message}` : "";
+  const riskFlags = active && !temperatureCanConstrainRules
+    ? [`盘前侦察温度 ${premarket.temperature}/100 置信度不足（${reliability?.label ?? "未记录"}），仅留痕和生成观察清单，不参与大盘扣分或状态压制。`]
+    : active && scorePenalty > 0
     ? [`盘前外围风险温度 ${premarket.temperature}/100（${premarket.emotionLabel}）：${firstFlag}${stateCap ? " 若规则原本为可交易，开盘前先降为谨慎交易，等待A股承接确认。" : ""}`]
     : [`盘前外围风险温度 ${premarket.temperature}/100（${premarket.emotionLabel}）：${modeNote}`];
+
+  const confidence =
+    reliabilityLevel === "high" && actionable === "plan_ready" ? "中" as const :
+    reliabilityLevel === "medium" || actionable === "degraded_reference" ? "低" as const :
+    "低" as const;
+  const failedOrBlocked = [
+    ...premarket.sourceTraces.filter((trace) => trace.status === "failed").map((trace) => trace.label),
+    ...(reliability ? [
+      reliability.fallbackBucketCount ? `盘前缺失桶 ${reliability.fallbackBucketCount} 个` : "",
+      reliability.staleScoreInputCount ? `盘前过期计分源 ${reliability.staleScoreInputCount} 个` : "",
+      reliability.failedScoreInputCount ? `盘前失败计分源 ${reliability.failedScoreInputCount} 个` : ""
+    ].filter(Boolean) : []),
+    ...(premarket.actionability?.missingImpact ?? [])
+  ];
 
   return {
     scorePenalty,
@@ -205,7 +230,7 @@ function buildPremarketOverlay(session?: MarketSessionContext, premarket?: Prema
       score: bucketScore,
       max: 10,
       status: scoreStatus(bucketScore, 10),
-      note: `${premarket.emotionLabel}，风险温度 ${premarket.temperature}/100。${modeNote}`
+      note: `${premarket.emotionLabel}，风险温度 ${premarket.temperature}/100。${modeNote}${actionabilityNote ? ` ${actionabilityNote}` : ""}${reliabilityNote ? ` ${reliabilityNote}` : ""}`
     },
     scoreBreakdown: {
       key: "premarket_external_risk",
@@ -214,12 +239,12 @@ function buildPremarketOverlay(session?: MarketSessionContext, premarket?: Prema
       maxScore: 0,
       evidenceRefs: ["premarket.risk.overlay"],
       dataSources: premarket.sourceTraces.map((trace) => `${trace.source}:${trace.records}`).slice(0, 4),
-      confidence: premarket.sourceTraces.some((trace) => trace.status === "failed") ? "低" as const : "中" as const,
-      missingFields: premarket.sourceTraces.filter((trace) => trace.status === "failed").map((trace) => trace.label),
-      downgradeReasons: scorePenalty > 0 ? [`盘前外围风险折扣 ${scorePenalty}`] : [],
-      note: `${firstFlag}${active ? " 仅在盘前/竞价约束交易进攻。" : " 当前只作背景风险。"}`
+      confidence,
+      missingFields: failedOrBlocked.slice(0, 8),
+      downgradeReasons: scorePenalty > 0 ? [`盘前外围风险折扣 ${scorePenalty}`] : temperatureCanConstrainRules ? [] : ["盘前温度置信度不足，未参与正式扣分"],
+      note: `${firstFlag}${active ? " 仅在盘前/竞价约束交易进攻。" : " 当前只作背景风险。"}${actionabilityNote ? ` ${actionabilityNote}` : ""}${reliabilityNote ? ` ${reliabilityNote}` : ""}`
     },
     riskFlags,
-    factText: `盘前侦察：外围风险温度 ${premarket.temperature}/100，状态 ${premarket.emotionLabel}，市场记录 ${premarket.markets.length} 条，事件日历 ${premarket.calendarEvents.length} 条；${firstFlag} ${modeNote}`
+    factText: `盘前侦察：外围风险温度 ${premarket.temperature}/100，状态 ${premarket.emotionLabel}，温度置信度 ${reliability?.label ?? "未记录"} ${reliability?.confidencePct ?? 0}%，可行动等级 ${premarket.actionability?.label ?? "未记录"}，市场记录 ${premarket.markets.length} 条，事件日历 ${premarket.calendarEvents.length} 条；${firstFlag} ${modeNote}`
   };
 }

@@ -5,6 +5,12 @@ export type StockKlinePayload = {
   code: string;
   source: string;
   sourceUrl?: string;
+  fetchedAt?: string;
+  latestTradeDate?: string;
+  expectedTradeDate?: string;
+  freshnessStatus?: "current" | "stale" | "unknown";
+  freshnessWarning?: string;
+  warnings?: string[];
   klines: ChartKLineData[];
 };
 export type ChartKLineData = KLineData & {
@@ -23,10 +29,21 @@ export type HoverChartInput = {
   mainNetFlow?: number | null;
   ma20DistancePct?: number | null;
   score?: number | null;
+  reportCreatedAt?: string | null;
+  quoteUpdatedAt?: string | null;
+  snapshotFetchedAt?: string | null;
+  reportLatest?: number | null;
+  reportChangePct?: number | null;
 };
 export type KLineCacheEntry = {
   data: ChartKLineData[];
   source: string;
   fetchedAt: number;
+  sourceFetchedAt?: string;
+  latestTradeDate?: string;
+  expectedTradeDate?: string;
+  freshnessStatus?: "current" | "stale" | "unknown";
+  freshnessWarning?: string;
+  warnings?: string[];
 };
 export type KLineChartsModule = typeof import("klinecharts");

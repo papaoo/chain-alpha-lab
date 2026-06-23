@@ -25,9 +25,17 @@ export function buildCompleteness(
   const blockingReasons = missingFields
     .filter((field) => ["K线", "技术指标", "资金流", "板块证据"].includes(field))
     .map((field) => `缺少${field}，禁止给出明确买入动作`);
-  const level = blockingReasons.length ? "insufficient" : missingFields.length || companyKnowledge.companyKnowledgeState !== "sufficient" ? "partial" : "complete";
+  if (companyKnowledge.companyKnowledgeState !== "sufficient") {
+    missingFields.push(companyKnowledge.companyKnowledgeState === "missing" ? "公司认知" : "公司认知补充字段");
+  }
+  const uniqueMissingFields = Array.from(new Set(missingFields));
+  const hasCoreMarketData = hasKlineData && hasTechnicalData && hasFundFlowData && hasSectorData;
+  const coreMarketLevel: DataCompleteness["coreMarketLevel"] = blockingReasons.length ? "insufficient" : hasCoreMarketData ? "complete" : "partial";
+  const level: DataCompleteness["level"] = coreMarketLevel === "insufficient" ? "insufficient" : coreMarketLevel === "complete" ? "complete" : "partial";
   return {
     level,
+    coreMarketLevel,
+    companyKnowledgeLevel: companyKnowledge.companyKnowledgeState,
     hasHotData,
     hasKlineData,
     hasTechnicalData,
@@ -35,7 +43,7 @@ export function buildCompleteness(
     hasSectorData,
     hasProfileData,
     hasCompanyKnowledge: companyKnowledge.companyKnowledgeState !== "missing",
-    missingFields,
+    missingFields: uniqueMissingFields,
     blockingReasons
   };
 }

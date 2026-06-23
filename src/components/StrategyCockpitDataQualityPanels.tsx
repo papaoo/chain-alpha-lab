@@ -1,9 +1,25 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { fetchApiJson } from "@/lib/client/api";
+import { localizeModelError } from "@/lib/display/modelErrorText";
 import type { AnalysisReport, AppSettings } from "@/lib/types";
-import type { CockpitWarning, Tone } from "@/components/StrategyCockpitTypes";
 import { EvidencePill, MiniStat } from "@/components/StrategyCockpitPrimitives";
+import type { CockpitWarning, Tone } from "@/components/StrategyCockpitTypes";
 import { formatLlmStatus, llmStatusTone, sentimentBoxClass, toneBadge } from "@/components/StrategyCockpitUtils";
+
+interface ModelUsageSummary {
+  callCount: number;
+  analysisCallCount: number;
+  selectionAgentCallCount: number;
+  failedOrRejectedCount: number;
+  repairOrRetryCount: number;
+  totalEstimatedInputTokens: number | null;
+  totalReportedTokens: number | null;
+  avgElapsedMs: number | null;
+  errorCategories: Array<{ key: string; label: string; count: number; mitigation: string }>;
+  notes: string[];
+}
 
 export function DataHealthStrip({
   groups,
@@ -31,7 +47,9 @@ export function DataHealthStrip({
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm font-semibold text-slate-100">数据源状态细分</p>
-            <p className="mt-1 text-xs text-slate-500">按影响类型分组；补源成功是能力提示，接口失败/空数据才是重点风险。</p>
+            <p className="mt-1 text-xs text-slate-500">
+              按影响类型分组；补源成功是能力提示，接口失败、空数据和过期数据才是重点风险。
+            </p>
           </div>
           <span className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-400">{warnings.length} 条来源提示</span>
         </div>
@@ -76,7 +94,7 @@ export function DataSourceTraceDigest({ traces }: { traces: NonNullable<Analysis
           <div key={row.provider} className="rounded-xl border border-slate-800 bg-slate-900/55 p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="truncate text-sm font-semibold text-slate-100" title={row.providerName}>{row.providerName}</p>
-              <span className={`rounded-lg border px-2 py-1 text-[11px] ${toneBadge(row.tone)}`}>{row.coverage}项</span>
+              <span className={`rounded-lg border px-2 py-1 text-[11px] ${toneBadge(row.tone)}`}>{row.coverage} 项</span>
             </div>
             <div className="mt-3 grid grid-cols-3 gap-1.5 text-center text-[11px]">
               <EvidencePill label="主源" value={row.primary} tone={row.primary ? "up" : "muted"} />
@@ -142,11 +160,11 @@ export function ModelQualityStrip({ report, settings }: { report: AnalysisReport
           <div>
             <p className="text-sm font-semibold text-slate-100">模型调用质量</p>
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              当前报告没有模型调用指标。可能是模型未启用、旧报告、或只运行了规则分析。
+              当前报告没有模型调用指标。可能是模型未启用、旧报告，或只运行了规则分析。
             </p>
           </div>
           <span className={`rounded-lg border px-2 py-1 text-xs ${settings?.modelAuditEnabled ? "border-cyan-400/25 bg-cyan-400/10 text-cyan-100" : "border-slate-700 bg-slate-900 text-slate-400"}`}>
-            反馈开关 {settings?.modelAuditEnabled ? "开启" : "关闭"}
+            反馈开关：{settings?.modelAuditEnabled ? "开启" : "关闭"}
           </span>
         </div>
       </div>
@@ -166,25 +184,65 @@ export function ModelQualityStrip({ report, settings }: { report: AnalysisReport
       <div className="mt-3 grid gap-2 md:grid-cols-4">
         <MiniStat label="耗时" value={`${metrics.elapsedMs} ms`} tone={metrics.elapsedMs > 45_000 ? "warn" : "info"} />
         <MiniStat label="请求次数" value={`${metrics.requestCount} 次`} tone={metrics.requestCount > 1 ? "warn" : "muted"} />
-        <MiniStat label="Prompt体积" value={`${promptTotal} 字符`} tone={promptTone} />
+        <MiniStat label="Prompt 体积" value={`${promptTotal} 字符`} tone={promptTone} />
         <MiniStat label="修复重试" value={metrics.repairAttempted ? "是" : "否"} tone={metrics.repairAttempted ? "warn" : "up"} />
       </div>
       <p className="mt-3 rounded-xl border border-slate-800 bg-slate-900/55 p-2 text-xs leading-5 text-slate-400">
         报告 Prompt {metrics.reportPromptChars} 字符；修复 Prompt {metrics.repairPromptChars ?? 0} 字符；估算输入 {metrics.estimatedInputTokens ?? "未记录"} tokens；错误数量 {metrics.errorCount}；最大输出 {metrics.maxTokens} tokens。
       </p>
       {metrics.skippedRepairReason ? (
-        <p className="mt-2 rounded-xl border border-amber-400/25 bg-amber-400/10 p-2 text-xs leading-5 text-amber-100">{metrics.skippedRepairReason}</p>
+        <p className="mt-2 rounded-xl border border-amber-400/25 bg-amber-400/10 p-2 text-xs leading-5 text-amber-100">{localizeModelError(metrics.skippedRepairReason)}</p>
       ) : null}
       {metrics.errors?.length ? (
         <details className="mt-2 rounded-xl border border-slate-800 bg-slate-900/55 p-2">
-          <summary className="cursor-pointer text-xs text-cyan-200">查看校验错误摘要</summary>
+          <summary className="cursor-pointer text-xs text-cyan-200">查看当前校验问题摘要</summary>
           <div className="mt-2 grid gap-1.5">
             {metrics.errors.slice(0, 6).map((error, index) => (
-              <p key={`${index}-${error}`} className="rounded-lg border border-slate-800 bg-slate-950/50 px-2 py-1.5 text-xs leading-5 text-slate-400">{error}</p>
+              <p key={`${index}-${error}`} className="rounded-lg border border-slate-800 bg-slate-950/50 px-2 py-1.5 text-xs leading-5 text-slate-400">{localizeModelError(error)}</p>
             ))}
           </div>
         </details>
       ) : null}
+      <ModelUsageMiniSummary />
     </div>
   );
+}
+
+function ModelUsageMiniSummary() {
+  const [summary, setSummary] = useState<ModelUsageSummary | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchApiJson<ModelUsageSummary>("/api/model-usage?windowDays=30&limit=120", { cache: "no-store", signal: controller.signal })
+      .then((json) => {
+        if (json.success) setSummary(json.data);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+
+  if (!summary) return null;
+  return (
+    <details className="mt-3 rounded-xl border border-slate-800 bg-slate-900/45 p-2">
+      <summary className="cursor-pointer text-xs text-cyan-200">最近 30 天模型成本统计</summary>
+      <div className="mt-2 grid gap-2 md:grid-cols-4">
+        <MiniStat label="调用" value={`${summary.callCount}`} tone="info" />
+        <MiniStat label="主线 / Agent" value={`${summary.analysisCallCount}/${summary.selectionAgentCallCount}`} tone="muted" />
+        <MiniStat label="拦截 / 重试" value={`${summary.failedOrRejectedCount}/${summary.repairOrRetryCount}`} tone={summary.failedOrRejectedCount || summary.repairOrRetryCount ? "warn" : "up"} />
+        <MiniStat label="输入 Token" value={formatToken(summary.totalEstimatedInputTokens ?? summary.totalReportedTokens)} tone="muted" />
+      </div>
+      {summary.errorCategories[0] ? (
+        <p className="mt-2 rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-xs leading-5 text-amber-100">
+          主要历史问题：{summary.errorCategories[0].label}（{summary.errorCategories[0].count} 次）。{summary.errorCategories[0].mitigation}
+        </p>
+      ) : null}
+      {summary.notes[0] ? <p className="mt-2 text-xs leading-5 text-amber-100">{summary.notes[0]}</p> : null}
+    </details>
+  );
+}
+
+function formatToken(value: number | null | undefined) {
+  if (value === null || value === undefined) return "未记录";
+  if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
+  return `${value}`;
 }

@@ -5,8 +5,21 @@ import { StockNameHover } from "@/components/ResearchStockHover";
 import { formatAction, formatThemeMatch, formatThemeMatchType, localizeText } from "@/components/ResearchCompanyFormatters";
 import { MiniStat, ScoreBreakdownPanel, SignalBadge, SourceTraceChips } from "@/components/ResearchCompanyUi";
 import { CompanyBulletBlock } from "@/components/ResearchCompanyBulletBlock";
+import { SerenityTagPanel } from "@/components/ResearchSerenityTags";
+import { CandidateTriggerGapPanel } from "@/components/ResearchCandidateTriggerGap";
+import type { SerenityResearchTag } from "@/lib/serenity/tagTypes";
 
-export function CompanySummaryCard({ candidate, report, onOpen }: { candidate: StockCandidate; report: AnalysisReport; onOpen: () => void }) {
+export function CompanySummaryCard({
+  candidate,
+  report,
+  onOpen,
+  serenityTag
+}: {
+  candidate: StockCandidate;
+  report: AnalysisReport;
+  onOpen: () => void;
+  serenityTag?: SerenityResearchTag;
+}) {
   const card = candidate.companyKnowledge;
   const plan = report.llmResult?.stockPlans.find((item) => item.code === candidate.code);
   const memory = report.factPackage.stockMemories?.find((item) => item.code.toLowerCase() === candidate.code.toLowerCase());
@@ -25,6 +38,7 @@ export function CompanySummaryCard({ candidate, report, onOpen }: { candidate: S
         <p className="mt-4 line-clamp-3 text-sm leading-6 text-muted">{localizeText(card.coreBusiness || card.mainBusiness || "公司基础信息不足。")}</p>
         <SourceTraceChips traces={candidate.sourceTraces ?? []} />
       </div>
+      <SerenityTagPanel tag={serenityTag} compact />
       <div className="grid gap-2">
         <MiniStat label="主线匹配" value={formatThemeMatch(card.themeMatch)} />
         <MiniStat label="归属证据" value={formatThemeMatchType(candidate.mainlineAttribution?.status ?? card.themeMatchType)} />
@@ -48,6 +62,7 @@ export function CompanySummaryCard({ candidate, report, onOpen }: { candidate: S
           </div>
         </div>
       ) : null}
+      <CandidateTriggerGapPanel candidate={candidate} compact />
       {plan ? (
         <div className="rounded-lg border border-line bg-bg/60 p-3 text-sm">
           <p className="font-medium">模型计划摘要</p>

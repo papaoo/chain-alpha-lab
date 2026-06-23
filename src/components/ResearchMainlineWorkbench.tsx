@@ -13,28 +13,33 @@ import { MainlineHero } from "@/components/ResearchMainlineHero";
 import { MainlinePulseStrip } from "@/components/ResearchMainlinePulseStrip";
 import { RuleBottleneckPanel } from "@/components/ResearchRuleBottleneckPanel";
 import { RuleReplayPanel } from "@/components/ResearchRuleReplayPanel";
+import { getSerenityTag, useSerenityTags } from "@/components/ResearchSerenityTags";
 import { CollapsibleSection, formatLlmStatus, formatMarketState, formatReportStatus, formatStage, localizeText, Metric, MiniStat, Panel, SectionTitle } from "@/components/ResearchMainlineCommon";
 
 export function Dashboard({
   report,
+  reports = [],
   candidates,
   selected,
   factMap,
   onSelect
 }: {
   report: AnalysisReport | null;
+  reports?: Array<Pick<AnalysisReport, "id" | "reportType" | "title" | "summary" | "llmStatus" | "reportStatus" | "createdAt">>;
   candidates: StockCandidate[];
   selected: StockCandidate | null;
   factMap: Map<string, Fact>;
   onSelect: (code: string) => void;
 }) {
   const [companyDetailOpen, setCompanyDetailOpen] = useState(false);
+  const serenityTags = useSerenityTags(candidates.map((candidate) => candidate.code));
+  const selectedSerenityTag = getSerenityTag(serenityTags, selected?.code);
 
   useEffect(() => {
     setCompanyDetailOpen(false);
   }, [selected?.code]);
 
-  if (!report) return <EmptyState />;
+  if (!report) return <EmptyState reports={reports} />;
   const market = report.llmResult?.marketJudgement;
   return (
     <section className="grid gap-4 xl:grid-cols-[1fr_420px]">
@@ -76,7 +81,7 @@ export function Dashboard({
               <ModelJudgementPanel report={report} factMap={factMap} />
             </CollapsibleSection>
             <div id="model-quality" className="scroll-mt-24">
-              <CollapsibleSection title="模型调用质量" meta="耗时 / Prompt 体积 / 修复重试" icon={BrainCircuit} defaultOpen={false}>
+              <CollapsibleSection title="模型调用质量" meta="耗时 / Prompt 体积 / 修复重试 / 历史成本" icon={BrainCircuit} defaultOpen={true}>
                 <ModelQualityPanel report={report} />
               </CollapsibleSection>
             </div>
@@ -90,15 +95,15 @@ export function Dashboard({
                           <p className="font-medium">{sector.name}</p>
                           <p className="mt-1 text-xs text-muted">{formatStage(sector.stage)} / {sector.lineQuality} / 置信度{sector.confidence ?? "低"}</p>
                           <p className="mt-1 text-xs text-muted">
-                            迁移：{sector.previousStage ? `${sector.previousStage} → ` : ""}{sector.rawStage && sector.rawStage !== sector.stage ? `${sector.rawStage} → ` : ""}{sector.stage}
-                            {sector.stageTransition ? ` / ${sector.stageTransition}` : ""}
+                            迁移：{sector.previousStage ? `${formatStage(sector.previousStage)} → ` : ""}{sector.rawStage && sector.rawStage !== sector.stage ? `${formatStage(sector.rawStage)} → ` : ""}{formatStage(sector.stage)}
+                            {sector.stageTransition ? ` / ${formatCoreContinuityState(sector.stageTransition)}` : ""}
                           </p>
                           {(sector.sourceNames?.length ?? 0) > 1 ? <p className="mt-1 text-xs text-muted">来源：{sector.sourceNames?.join(" / ")}</p> : null}
                           <p className="mt-2 text-xs text-muted">允许：{sector.allowedBuyTypes.length ? sector.allowedBuyTypes.join("、") : "无"}；禁止：{sector.forbiddenActions.join("、") || "无"}</p>
                           {sector.stageTransitionReason ? <p className="mt-2 text-xs leading-5 text-muted">{localizeText(sector.stageTransitionReason)}</p> : null}
                           {sector.coreContinuity ? (
                             <div className="mt-2 grid gap-2 md:grid-cols-4">
-                              <MiniStat label="核心状态" value={sector.coreContinuity.state} />
+                              <MiniStat label="核心状态" value={formatCoreContinuityState(sector.coreContinuity.state)} />
                               <MiniStat label="延续核心" value={sector.coreContinuity.retained.length ? `${sector.coreContinuity.retained.length} 只` : "无"} />
                               <MiniStat label="新核心" value={sector.coreContinuity.appeared.length ? `${sector.coreContinuity.appeared.length} 只` : "无"} />
                               <MiniStat label="换龙头" value={sector.coreContinuity.leaderChanged ? "是" : "否"} />
@@ -133,12 +138,19 @@ export function Dashboard({
         </div>
       </Panel>
 
-      <CandidateSignalsPanel report={report} candidates={candidates} selected={selected} onSelect={onSelect} />
+      <CandidateSignalsPanel
+        report={report}
+        candidates={candidates}
+        selected={selected}
+        onSelect={onSelect}
+        serenityTags={serenityTags}
+        latestReportCreatedAt={reports[0]?.createdAt}
+      />
 
       <div id="company-card" className="scroll-mt-24">
         <Panel>
           <SectionTitle icon={Building2} title="公司认知卡片" meta={selected?.code ?? "暂无"} />
-          {selected ? <CompanySummaryCard candidate={selected} report={report} onOpen={() => setCompanyDetailOpen(true)} /> : null}
+          {selected ? <CompanySummaryCard candidate={selected} report={report} onOpen={() => setCompanyDetailOpen(true)} serenityTag={selectedSerenityTag} /> : null}
         </Panel>
       </div>
       {selected ? (
@@ -147,9 +159,32 @@ export function Dashboard({
           candidate={selected}
           factMap={factMap}
           report={report}
+          serenityTag={selectedSerenityTag}
           onClose={() => setCompanyDetailOpen(false)}
         />
       ) : null}
     </section>
   );
+}
+
+function formatCoreContinuityState(value?: string) {
+  const text = String(value ?? "").trim();
+  const labels: Record<string, string> = {
+    retained: "核心延续",
+    appeared: "出现新核心",
+    disappeared: "核心退出",
+    stable: "结构稳定",
+    healthy: "结构健康",
+    improving: "结构改善",
+    deteriorating: "结构转弱",
+    leader_changed: "龙头切换",
+    no_core: "核心不足",
+    none: "无",
+    upgrade: "升级",
+    downgrade: "降级",
+    unchanged: "延续",
+    watch: "观察",
+    unknown: "待确认"
+  };
+  return labels[text] ?? localizeText(text) ?? (text || "待确认");
 }

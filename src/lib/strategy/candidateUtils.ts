@@ -8,6 +8,16 @@ export function normalizeStockCode(code: string) {
   return `sz${digits}`;
 }
 
+export function isAshareStockCode(code: string) {
+  const normalized = normalizeStockCode(code);
+  const digits = normalized.match(/\d{6}/)?.[0];
+  if (!digits) return false;
+  if (normalized.startsWith("bj")) return /^[48]/.test(digits);
+  if (normalized.startsWith("sh")) return /^(600|601|603|605|688|689)/.test(digits);
+  if (normalized.startsWith("sz")) return /^(000|001|002|003|300|301|302)/.test(digits);
+  return false;
+}
+
 export function formatPct(value?: number) {
   return value === undefined ? "缺失" : `${value.toFixed(1)}%`;
 }

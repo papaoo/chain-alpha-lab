@@ -1,4 +1,5 @@
 import type { DeepSeekReport, FactPackage } from "../types";
+import { compactFactPackageForLlm } from "./deepseek";
 import { buildRepairPrompt, buildReportPrompt, SYSTEM_PROMPT } from "./prompts";
 import { parseAndValidateDeepSeekOutput } from "./validator";
 
@@ -17,7 +18,10 @@ export interface ModelProviderClientResult {
   validationErrors: string[];
   repaired: boolean;
   rawOutput: string | null;
+  skippedRepairReason?: string;
 }
+
+const DEFAULT_MAX_REPAIR_PROMPT_CHARS = 40_000;
 
 export type DeepSeekClientConfig = ModelProviderClientConfig;
 export type DeepSeekClientResult = ModelProviderClientResult;
@@ -42,8 +46,9 @@ export class ModelProviderClient {
   }
 
   async generateReport(factPackage: FactPackage): Promise<ModelProviderClientResult> {
-    const firstOutput = await this.createJsonOnlyCompletion(buildReportPrompt(factPackage));
-    const firstValidation = parseAndValidateDeepSeekOutput(firstOutput, factPackage);
+    const compactPackage = compactFactPackageForLlm(factPackage);
+    const firstOutput = await this.createJsonOnlyCompletion(buildReportPrompt(compactPackage));
+    const firstValidation = parseAndValidateDeepSeekOutput(firstOutput, compactPackage);
     if (firstValidation.ok) {
       return {
         status: "success",
@@ -54,8 +59,22 @@ export class ModelProviderClient {
       };
     }
 
-    const repairOutput = await this.createJsonOnlyCompletion(buildRepairPrompt(factPackage, firstValidation.errors));
-    const repairValidation = parseAndValidateDeepSeekOutput(repairOutput, factPackage);
+    const repairPrompt = buildRepairPrompt(compactPackage, firstValidation.errors);
+    const maxRepairPromptChars = repairPromptBudgetChars();
+    if (repairPrompt.length > maxRepairPromptChars) {
+      const skippedRepairReason = `修复上下文 ${repairPrompt.length} 字符超过 ${maxRepairPromptChars} 字符预算，已跳过二次模型调用。`;
+      return {
+        status: "rejected",
+        report: null,
+        validationErrors: [...firstValidation.errors, skippedRepairReason],
+        repaired: false,
+        rawOutput: firstOutput,
+        skippedRepairReason
+      };
+    }
+
+    const repairOutput = await this.createJsonOnlyCompletion(repairPrompt);
+    const repairValidation = parseAndValidateDeepSeekOutput(repairOutput, compactPackage);
     if (repairValidation.ok) {
       return {
         status: "success",
@@ -114,6 +133,12 @@ export class ModelProviderClient {
 }
 
 export class DeepSeekClient extends ModelProviderClient {}
+
+function repairPromptBudgetChars() {
+  const raw = process.env.LLM_REPAIR_PROMPT_MAX_CHARS;
+  const parsed = raw ? Number(raw) : DEFAULT_MAX_REPAIR_PROMPT_CHARS;
+  return Number.isFinite(parsed) && parsed >= 10_000 ? Math.trunc(parsed) : DEFAULT_MAX_REPAIR_PROMPT_CHARS;
+}
 
 function buildChatCompletionsUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");

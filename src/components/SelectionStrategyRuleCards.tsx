@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckCircle2, ChevronDown, Network, Target } from "lucide-react";
+import { cleanDisplayText } from "@/lib/display/text";
 import type { SelectionStrategyDefinition } from "@/lib/selection/types";
 
 type IconType = typeof CheckCircle2;
@@ -16,33 +17,27 @@ export function StrategyRuleExplainer({
     <div className="grid gap-4">
       <CollapsibleSection
         icon={CheckCircle2}
-        title="规则边界与数据要求"
-        meta={`${active.hardFilters.length} 条硬过滤 / ${active.requiredData.length} 类必需数据`}
+        title="Rule boundary and required data"
+        meta={`${active.hardFilters.length} hard filters / ${active.requiredData.length} required data groups`}
       >
         <div className="grid gap-4 lg:grid-cols-2">
-          <EvidencePanel icon={CheckCircle2} title="硬过滤">
-            {active.hardFilters.map((item) => (
-              <EvidenceLine key={item} text={item} />
-            ))}
+          <EvidencePanel icon={CheckCircle2} title="Hard filters">
+            {active.hardFilters.map((item) => <EvidenceLine key={item} text={item} />)}
           </EvidencePanel>
 
-          <EvidencePanel icon={Network} title="必需数据">
-            {active.requiredData.map((item) => (
-              <EvidenceLine key={item} text={item} />
-            ))}
+          <EvidencePanel icon={Network} title="Required data">
+            {active.requiredData.map((item) => <EvidenceLine key={item} text={item} />)}
           </EvidencePanel>
         </div>
       </CollapsibleSection>
 
       <CollapsibleSection
         icon={Target}
-        title="评分因子"
-        meta={`${active.scoreFactors.length} 项，可追溯到运行详情`}
+        title="Score factors"
+        meta={`${active.scoreFactors.length} factors, all traceable in run detail`}
       >
         <div className="grid gap-3 md:grid-cols-2">
-          {active.scoreFactors.map((factor) => (
-            <ScoreFactorCard key={factor.key} factor={factor} />
-          ))}
+          {active.scoreFactors.map((factor) => <ScoreFactorCard key={factor.key} factor={factor} />)}
         </div>
       </CollapsibleSection>
 
@@ -91,38 +86,34 @@ function AllStrategyRuleDeck({
   return (
     <CollapsibleSection
       icon={Network}
-      title="六策略规则总览"
-      meta="用于对比不同策略的适用场景、硬约束和输出重点"
+      title="All strategy rule deck"
+      meta="Compare applicable scenes, hard constraints, and output focus."
     >
       <div className="grid gap-3 xl:grid-cols-2">
         {strategies.map((strategy) => (
           <article
             key={strategy.id}
-            className={`rounded-lg border p-3 ${
-              strategy.id === activeId ? "border-info/45 bg-info/10" : "border-line bg-bg/50"
-            }`}
+            className={`rounded-lg border p-3 ${strategy.id === activeId ? "border-info/45 bg-info/10" : "border-line bg-bg/50"}`}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-medium text-slate-100">
-                  {strategy.order.toString().padStart(2, "0")} · {strategy.name}
+                  {strategy.order.toString().padStart(2, "0")} / {safeText(strategy.name)}
                 </p>
-                <p className="mt-1 text-xs leading-5 text-muted">{strategy.subtitle}</p>
+                <p className="mt-1 text-xs leading-5 text-muted">{safeText(strategy.subtitle)}</p>
               </div>
-              <span className="rounded border border-line px-1.5 py-0.5 text-[10px] text-muted">
-                {strategy.defaultTimeRange}
-              </span>
+              <span className="rounded border border-line px-1.5 py-0.5 text-[10px] text-muted">{strategy.defaultTimeRange}</span>
             </div>
-            <p className="mt-3 line-clamp-2 text-xs leading-5 text-muted">{strategy.description}</p>
+            <p className="mt-3 line-clamp-2 text-xs leading-5 text-muted">{safeText(strategy.description)}</p>
             <div className="mt-3 grid gap-2 sm:grid-cols-3">
-              <MiniRuleStat label="硬过滤" value={`${strategy.hardFilters.length}`} />
-              <MiniRuleStat label="评分因子" value={`${strategy.scoreFactors.length}`} />
-              <MiniRuleStat label="必需数据" value={`${strategy.requiredData.length}`} />
+              <MiniRuleStat label="Filters" value={`${strategy.hardFilters.length}`} />
+              <MiniRuleStat label="Factors" value={`${strategy.scoreFactors.length}`} />
+              <MiniRuleStat label="Data" value={`${strategy.requiredData.length}`} />
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {strategy.outputFocus.slice(0, 4).map((item) => (
                 <span key={item} className="rounded border border-line bg-panel/55 px-2 py-1 text-[11px] text-muted">
-                  {item}
+                  {safeText(item)}
                 </span>
               ))}
             </div>
@@ -137,13 +128,13 @@ function ScoreFactorCard({ factor }: { factor: SelectionStrategyDefinition["scor
   return (
     <div className="rounded-lg border border-line bg-bg/50 p-3">
       <div className="flex items-center justify-between gap-3">
-        <p className="font-medium">{factor.label}</p>
+        <p className="font-medium">{safeText(factor.label)}</p>
         <span className="font-mono text-sm text-info">{factor.weight}</span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line">
         <div className="h-full rounded-full bg-info" style={{ width: `${Math.max(6, Math.min(100, factor.weight))}%` }} />
       </div>
-      <p className="mt-2 text-xs leading-5 text-muted">{factor.description}</p>
+      <p className="mt-2 text-xs leading-5 text-muted">{safeText(factor.description)}</p>
     </div>
   );
 }
@@ -165,7 +156,7 @@ function EvidencePanel({ icon: Icon, title, children }: { icon: IconType; title:
 function EvidenceLine({ text }: { text: string }) {
   return (
     <div className="rounded-lg border border-line bg-bg/50 px-3 py-2 text-sm leading-5 text-muted">
-      {text}
+      {safeText(text)}
     </div>
   );
 }
@@ -177,4 +168,8 @@ function MiniRuleStat({ label, value }: { label: string; value: string }) {
       <p className="mt-1 font-mono text-xs text-slate-200">{value}</p>
     </div>
   );
+}
+
+function safeText(value?: string | null) {
+  return cleanDisplayText(value) ?? value ?? "";
 }

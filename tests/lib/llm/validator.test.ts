@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DeepSeekReport, FactPackage } from "../../../src/lib/types";
 import { SCHEMA_VERSION } from "../../../src/lib/types";
 import { parseAndValidateDeepSeekOutput, parseAndValidateModelAuditOutput } from "../../../src/lib/llm";
+import { buildRepairPrompt, buildReportPrompt } from "../../../src/lib/llm/prompts";
 import { inferMarketSessionContext } from "../../../src/lib/market/session";
 
 const baseFactPackage: FactPackage = {
@@ -254,6 +255,38 @@ describe("parseAndValidateDeepSeekOutput", () => {
     expect(result.report?.intradayWatchlist?.[0]?.code).toBe("sz000001");
   });
 
+  it("normalizes common model aliases before strict validation", () => {
+    const factPackage = structuredClone(baseFactPackage);
+    factPackage.facts.push({
+      factId: "audit.constraints",
+      sourceType: "ruleComputed",
+      text: "系统风控约束事实存在。",
+    });
+    const report: any = structuredClone(validReport);
+    report.notifications = [
+      {
+        level: "warning",
+        message: "继续遵守仓位边界。",
+        evidenceRefs: ["constraints"],
+      },
+    ];
+    report.mainlineStageForecasts = [
+      {
+        name: "AI",
+        currentStage: "启动",
+        nextStage: "修复",
+        triggerCondition: "核心股延续且扩散改善时再确认。",
+        invalidCondition: "核心股回落或资金转弱则降级。",
+        evidenceRefs: ["sector.ai.rule.stage"],
+      },
+    ];
+
+    const result = parseAndValidateDeepSeekOutput(JSON.stringify(report), factPackage);
+    expect(result.ok).toBe(true);
+    expect(result.report?.notifications[0]?.evidenceRefs).toEqual(["audit.constraints"]);
+    expect(result.report?.mainlineStageForecasts?.[0]?.nextStage).toBe("确认");
+  });
+
   it("rejects optional structured insights with unknown evidence or stocks outside the candidate pool", () => {
     const report: DeepSeekReport = {
       ...validReport,
@@ -457,5 +490,47 @@ describe("parseAndValidateModelAuditOutput", () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join("\n")).toContain("unknown factId");
     expect(result.errors.join("\n")).toContain("crosses system boundary");
+  });
+});
+
+describe("LLM prompt evidence whitelist", () => {
+  it("does not suggest absent special evidence ids in report or repair prompts", () => {
+    const factPackage = structuredClone(baseFactPackage);
+    factPackage.facts = factPackage.facts.filter(
+      (fact) => fact.factId !== "session.market.phase" && fact.factId !== "premarket.risk.overlay" && fact.factId !== "audit.constraints",
+    );
+    factPackage.premarket = undefined;
+
+    const reportPrompt = buildReportPrompt(factPackage);
+    const repairPrompt = buildRepairPrompt(factPackage, ["marketJudgement.evidenceRefs contains unknown factId"]);
+
+    expect(reportPrompt).toContain("allowedEvidenceRefs");
+    expect(reportPrompt).toContain("stock.sz000001.kline.trend");
+    expect(reportPrompt).not.toContain('["session.market.phase"]');
+    expect(reportPrompt).not.toContain('["premarket.risk.overlay"]');
+    expect(reportPrompt).not.toContain("当前可用专项证据：session.market.phase");
+    expect(reportPrompt).not.toContain("当前可用专项证据：premarket.risk.overlay");
+
+    expect(repairPrompt).toContain("evidenceWhitelist");
+    expect(repairPrompt).toContain("stock.sz000001.kline.trend");
+    expect(repairPrompt).not.toContain('"session.market.phase"');
+    expect(repairPrompt).not.toContain('"premarket.risk.overlay"');
+    expect(repairPrompt).not.toContain('"audit.constraints"');
+  });
+
+  it("allows special evidence ids only when the compact fact package really contains them", () => {
+    const factPackage = structuredClone(baseFactPackage);
+    factPackage.facts.push(
+      { factId: "session.market.phase", sourceType: "ruleComputed", text: "session fact exists" },
+      { factId: "premarket.risk.overlay", sourceType: "dataSourceFact", text: "premarket fact exists" },
+    );
+
+    const reportPrompt = buildReportPrompt(factPackage);
+    const repairPrompt = buildRepairPrompt(factPackage, ["retry"]);
+
+    expect(reportPrompt).toContain('"session.market.phase"');
+    expect(reportPrompt).toContain('"premarket.risk.overlay"');
+    expect(repairPrompt).toContain('"session.market.phase"');
+    expect(repairPrompt).toContain('"premarket.risk.overlay"');
   });
 });

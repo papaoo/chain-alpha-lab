@@ -74,15 +74,17 @@ export function buildDataSourceWarningDetails(warnings: string[]): NonNullable<F
       message,
       severity,
       scope,
-      impact: warningImpact(scope, severity),
-      action: warningAction(scope, severity)
+      impact: warningImpact(scope, severity, message),
+      action: warningAction(scope, severity, message)
     };
   });
 }
 
 function inferWarningSeverity(message: string): NonNullable<FactPackage["dataSource"]["warningDetails"]>[number]["severity"] {
-  if (/失败|failed|fetch failed|超时|timeout|网络|接口请求失败|未找到|空数据|缺失/i.test(message)) return "risk";
-  if (/降级|近似|弱参考|滞后|校验|不能视为|需复核|补充/.test(message)) return "warning";
+  if (/近似成分来源|已使用关联板块|降级确认|降级参考|降级|近似|弱参考|滞后|校验|不能视为|需复核|补充/.test(message)) return "warning";
+  if (isCriticalDecisionDatasetFailure(message)) return "risk";
+  if (/接口请求失败|fetch failed|timeout|超时|网络|解析错误|HTTP/i.test(message)) return "warning";
+  if (/失败|failed|未找到|空数据|缺失|未取得|未返回/i.test(message)) return "risk";
   return "info";
 }
 
@@ -98,8 +100,12 @@ function inferWarningScope(message: string): NonNullable<FactPackage["dataSource
 
 function warningImpact(
   scope: NonNullable<FactPackage["dataSource"]["warningDetails"]>[number]["scope"],
-  severity: NonNullable<FactPackage["dataSource"]["warningDetails"]>[number]["severity"]
+  severity: NonNullable<FactPackage["dataSource"]["warningDetails"]>[number]["severity"],
+  message = ""
 ) {
+  if (severity === "warning" && isTransientSourceFailure(message)) {
+    return "中影响：上游接口出现瞬时失败；若核心字段已由主源或备用源补齐，结论可用但需留痕。";
+  }
   const prefix = severity === "risk" ? "高影响" : severity === "warning" ? "中影响" : "低影响";
   const labels: Record<typeof scope, string> = {
     market: "大盘状态、宽度和情绪评分需要降级确认",
@@ -115,9 +121,13 @@ function warningImpact(
 
 function warningAction(
   scope: NonNullable<FactPackage["dataSource"]["warningDetails"]>[number]["scope"],
-  severity: NonNullable<FactPackage["dataSource"]["warningDetails"]>[number]["severity"]
+  severity: NonNullable<FactPackage["dataSource"]["warningDetails"]>[number]["severity"],
+  message = ""
 ) {
   if (severity === "info") return "记录留痕即可，不单独改变规则结论。";
+  if (severity === "warning" && isTransientSourceFailure(message)) {
+    return "检查数据源稳定性和代理状态；若候选股/大盘核心字段完整，不因单次瞬断废弃整份报告。";
+  }
   const actions: Record<typeof scope, string> = {
     market: "检查全A宽度、涨跌停池和指数技术指标；缺失时禁止判为可交易。",
     sector: "补充板块代码映射、成分股和同义板块来源；近似成分需标记置信度。",
@@ -128,4 +138,15 @@ function warningAction(
     system: "查看数据源日志和接口健康检查。"
   };
   return actions[scope];
+}
+
+function isTransientSourceFailure(message: string) {
+  return /接口请求失败|fetch failed|timeout|超时|网络|解析错误|HTTP/i.test(message)
+    && !isCriticalDecisionDatasetFailure(message)
+    && !/未取得|未返回|空数据|缺失|未找到/i.test(message);
+}
+
+function isCriticalDecisionDatasetFailure(message: string) {
+  return /涨跌停池|涨停池|跌停池|炸板池|全A宽度|市场宽度|指数技术指标|大盘核心指数/i.test(message)
+    && /失败|failed|fetch failed|timeout|超时|网络|接口请求失败|未取得|未返回|空数据|缺失/i.test(message);
 }

@@ -162,6 +162,46 @@ describe("EastmoneyAdapter", () => {
     });
   });
 
+  it("maps scarce gallium-germanium themes to resource boards before semiconductor aliases", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            total: 4,
+            diff: [
+              { f12: "BK0916", f14: "氮化镓" },
+              { f12: "BK0952", f14: "第三代半导体" },
+              { f12: "BK0695", f14: "小金属概念" },
+              { f12: "BK0519", f14: "稀缺资源" }
+            ]
+          }
+        })
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            total: 1,
+            diff: [{
+              f2: 10,
+              f3: 4,
+              f12: "000060",
+              f13: 0,
+              f14: "中金岭南",
+              f21: 1000000000
+            }]
+          }
+        })
+      } as Response);
+
+    const result = await new EastmoneyAdapter().getSectorConstituents("锗镓概念", "concept");
+
+    expect(result.warnings[0]).toContain("近似成分来源");
+    expect(result.data?.boardCode).toBe("BK0695");
+    expect(result.data?.resolvedBoardName).toBe("小金属概念");
+  });
+
   it("does not warn when down-limit or open-board pools are empty", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

@@ -10,9 +10,11 @@ import type {
   DatabaseArchiveRecord,
   DatabaseAuditReport,
   DatabaseBackupRecord,
+  DatabaseReconciliationBaseline,
   DatabaseRetentionPreview,
   DatabaseRuntimeInfo,
-  DatabaseStatsSummary
+  DatabaseStatsSummary,
+  ReportSummaryMaintenanceStatus
 } from "@/components/ResearchSettingsTypes";
 
 export function DatabaseSettingsPanel({
@@ -20,13 +22,17 @@ export function DatabaseSettingsPanel({
   runtime,
   retentionPreview,
   audit,
+  reconciliation,
   backups,
   archives,
   status,
   backupStatus,
   archiveStatus,
+  reportSummaryStatus,
+  reportSummaryMaintenanceStatus,
   loadDatabaseStats,
   loadDatabaseAudit,
+  backfillReportSummaries,
   createDatabaseBackup,
   exportDatabaseArchive,
   formatDateTime
@@ -35,13 +41,17 @@ export function DatabaseSettingsPanel({
   runtime: DatabaseRuntimeInfo | null;
   retentionPreview: DatabaseRetentionPreview | null;
   audit: DatabaseAuditReport | null;
+  reconciliation: DatabaseReconciliationBaseline | null;
   backups: DatabaseBackupRecord[];
   archives: DatabaseArchiveRecord[];
   status: string;
   backupStatus: string;
   archiveStatus: string;
+  reportSummaryStatus: ReportSummaryMaintenanceStatus | null;
+  reportSummaryMaintenanceStatus: string;
   loadDatabaseStats: () => void;
   loadDatabaseAudit: () => void;
+  backfillReportSummaries: () => void;
   createDatabaseBackup: () => void;
   exportDatabaseArchive: () => void;
   formatDateTime: (value: string) => string;
@@ -146,6 +156,66 @@ export function DatabaseSettingsPanel({
           </div>
         </details>
 
+        <details className="rounded-lg border border-line bg-bg/40 p-3">
+          <summary className="cursor-pointer text-sm font-medium text-info">
+            迁移对账基线 {reconciliation ? ` / ${reconciliation.label}` : " / 未生成"}
+          </summary>
+          <div className="mt-3 grid gap-3">
+            <div className="grid gap-2 md:grid-cols-4">
+              <MiniStat label="基线状态" value={reconciliation?.label ?? "待读取"} />
+              <MiniStat label="目标配置" value={reconciliation?.configuredTargetProvider ?? "-"} />
+              <MiniStat label="基线指纹" value={reconciliation?.baselineHash ?? "-"} />
+              <MiniStat label="生成时间" value={reconciliation ? formatDateTime(reconciliation.generatedAt) : "-"} />
+            </div>
+            {reconciliation?.blockers.length ? (
+              <div className="rounded-lg border border-warn/25 bg-warn/10 p-3 text-xs leading-5 text-warn">
+                <p className="mb-1 font-medium text-text">阻断项</p>
+                <ul className="grid gap-1">
+                  {reconciliation.blockers.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            {reconciliation?.warnings.length ? (
+              <div className="rounded-lg border border-info/25 bg-info/10 p-3 text-xs leading-5 text-info">
+                <p className="mb-1 font-medium text-text">复核提示</p>
+                <ul className="grid gap-1">
+                  {reconciliation.warnings.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            <div className="grid gap-2 lg:grid-cols-2">
+              <div className="rounded-lg border border-line bg-panel/55 p-3">
+                <p className="text-sm font-medium">行数与最新时间</p>
+                <div className="mt-2 grid gap-1 text-xs leading-5 text-muted">
+                  {(reconciliation?.tableChecks ?? []).slice(0, 8).map((item) => (
+                    <p key={item.table} className="flex justify-between gap-3">
+                      <span className="font-mono">{item.table}</span>
+                      <span>{item.rowCount.toLocaleString("zh-CN")} / {item.latestAt ? formatDateTime(item.latestAt) : "-"}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-line bg-panel/55 p-3">
+                <p className="text-sm font-medium">JSON 对账</p>
+                <div className="mt-2 grid gap-1 text-xs leading-5 text-muted">
+                  {(reconciliation?.jsonChecks ?? []).slice(0, 8).map((item) => (
+                    <p key={`${item.table}.${item.column}`} className="flex justify-between gap-3">
+                      <span className="truncate font-mono">{item.table}.{item.column}</span>
+                      <span>{item.invalidRows ? `${item.invalidRows} 异常` : `${item.checkedRows}/${item.totalNonEmptyRows}`}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-line bg-panel/55 p-3">
+              <p className="text-sm font-medium">下一步</p>
+              <ul className="mt-2 grid gap-1 text-xs leading-5 text-muted">
+                {(reconciliation?.nextSteps ?? ["等待基线生成。"]).map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            </div>
+          </div>
+        </details>
+
         <div className="grid gap-3 md:grid-cols-4">
           <MiniStat label="数据库" value={stats?.provider ?? "sqlite"} />
           <MiniStat label="文件大小" value={stats ? `${stats.sizeMB} MB` : "读取中"} />
@@ -193,6 +263,57 @@ export function DatabaseSettingsPanel({
           {backupStatus ? <span className="text-xs text-muted">{backupStatus}</span> : null}
           {archiveStatus ? <span className="text-xs text-muted">{archiveStatus}</span> : null}
         </div>
+
+        <details className="rounded-lg border border-line bg-bg/40 p-3">
+          <summary className="cursor-pointer text-sm font-medium text-info">
+            报表摘要索引维护
+            {reportSummaryStatus ? ` / 覆盖 ${reportSummaryStatus.coveragePct}%` : " / 待读取"}
+          </summary>
+          <div className="mt-3 grid gap-3">
+            <div className="rounded-lg border border-info/25 bg-info/10 p-3 text-xs leading-5 text-muted">
+              报表摘要索引用来支撑数据源健康、规则瓶颈、候选池复盘等高频面板，避免每次都解析完整 FactPackage。
+              它是可重建的派生数据，不替代原始分析报告。
+            </div>
+            <div className="grid gap-2 md:grid-cols-4">
+              <MiniStat label="完整报告" value={reportSummaryStatus ? reportSummaryStatus.fullReportCount.toLocaleString("zh-CN") : "-"} />
+              <MiniStat label="摘要索引" value={reportSummaryStatus ? reportSummaryStatus.summaryCount.toLocaleString("zh-CN") : "-"} />
+              <MiniStat label="缺失摘要" value={reportSummaryStatus ? reportSummaryStatus.missingCount.toLocaleString("zh-CN") : "-"} />
+              <MiniStat label="覆盖率" value={reportSummaryStatus ? `${reportSummaryStatus.coveragePct}%` : "-"} />
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <MiniStat label="最新报告" value={reportSummaryStatus?.latestReportAt ? formatDateTime(reportSummaryStatus.latestReportAt) : "-"} />
+              <MiniStat label="最新摘要生成" value={reportSummaryStatus?.latestSummaryAt ? formatDateTime(reportSummaryStatus.latestSummaryAt) : "-"} />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                className="flex w-fit items-center gap-2 rounded-lg border border-info/40 bg-info/10 px-4 py-2 text-sm text-info hover:border-info/70"
+                type="button"
+                onClick={backfillReportSummaries}
+              >
+                <RefreshCw size={16} />
+                补齐摘要索引
+              </button>
+              <button
+                className="flex w-fit items-center gap-2 rounded-lg border border-line bg-bg/60 px-4 py-2 text-sm text-muted hover:border-info/50 hover:text-info"
+                type="button"
+                onClick={loadDatabaseStats}
+              >
+                <Database size={16} />
+                刷新状态
+              </button>
+              {reportSummaryMaintenanceStatus ? <span className="text-xs text-muted">{reportSummaryMaintenanceStatus}</span> : null}
+            </div>
+            {reportSummaryStatus?.missingCount ? (
+              <div className="rounded-lg border border-warn/25 bg-warn/10 p-3 text-xs leading-5 text-warn">
+                仍有 {reportSummaryStatus.missingCount.toLocaleString("zh-CN")} 份历史报告缺少摘要。建议先补齐，避免健康面板回落到解析大 JSON 的慢路径。
+              </div>
+            ) : reportSummaryStatus ? (
+              <div className="rounded-lg border border-up/25 bg-up/10 p-3 text-xs leading-5 text-up">
+                当前摘要索引已覆盖完整报告，高频面板可以走轻量读取路径。
+              </div>
+            ) : null}
+          </div>
+        </details>
 
         <details className="rounded-lg border border-line bg-bg/40 p-3" open>
           <summary className="cursor-pointer text-sm font-medium text-info">

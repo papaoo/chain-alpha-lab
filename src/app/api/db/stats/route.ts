@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDatabaseAudit } from "@/lib/db/audit";
+import { getDatabaseReconciliationBaseline } from "@/lib/db/reconciliation";
 import { getDatabaseRuntimeInfo } from "@/lib/db/runtime";
 import { getDatabaseRetentionPreview, getDatabaseStats } from "@/lib/db/stats";
 
@@ -13,6 +14,8 @@ export async function GET(request: Request) {
       ? getDatabaseRuntimeInfo()
       : mode === "audit"
         ? getDatabaseAudit({ maxJsonRowsPerColumn: Number.isFinite(sampleLimit) ? sampleLimit : undefined })
+        : mode === "reconciliation"
+          ? getDatabaseReconciliationBaseline()
       : getDatabaseStats();
   return NextResponse.json({ success: true, data, error: null });
 }

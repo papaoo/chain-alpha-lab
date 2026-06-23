@@ -1,5 +1,6 @@
 import type { Fact, MarketRuleResult } from "@/lib/types";
 import type { ParsedCommandResult } from "@/lib/westock/parser";
+import { normalizeStockCode } from "@/lib/strategy/candidateUtils";
 
 export function firstRow(result?: ParsedCommandResult | null) {
   return firstTableRows(result)[0];
@@ -23,6 +24,35 @@ export function rowMap(result?: ParsedCommandResult | null, codeField = "code") 
   for (const row of firstTableRows(result)) {
     const code = String(row[codeField] ?? "");
     if (!map.has(code)) map.set(code, row);
+  }
+  return map;
+}
+
+const DEFAULT_CODE_FIELDS = [
+  "code",
+  "symbol",
+  "SecuCode",
+  "secuCode",
+  "marketCode",
+  "ts_code",
+  "tsCode",
+  "stockCode"
+] as const;
+
+export function rowMapByNormalizedCode(
+  result?: ParsedCommandResult | null,
+  preferredFields: string[] = []
+) {
+  const map = new Map<string, Record<string, unknown>>();
+  const fields = Array.from(new Set([...preferredFields, ...DEFAULT_CODE_FIELDS]));
+  for (const row of firstTableRows(result)) {
+    for (const field of fields) {
+      const raw = row[field];
+      if (raw === undefined || raw === null) continue;
+      const code = normalizeStockCode(String(raw));
+      if (!code || map.has(code)) continue;
+      map.set(code, row);
+    }
   }
   return map;
 }

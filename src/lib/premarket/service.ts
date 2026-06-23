@@ -1,5 +1,10 @@
-import { firstTableRows, type ParsedCell } from "@/lib/westock/parser";
-import { westockAdapter } from "@/lib/westock/adapter";
+import { effectiveTradeDateForSession, inferMarketSessionContext } from "@/lib/market/session";
+import { calendarEventProvider, type CalendarSourceStatus } from "@/lib/premarket/calendarEventProvider";
+import {
+  evaluatePremarketActionability,
+  evaluatePremarketDataQuality,
+  evaluatePremarketTemperatureReliability
+} from "@/lib/premarket/reliability";
 import type {
   PremarketCalendarEvent,
   PremarketCatalystEvent,
@@ -14,11 +19,13 @@ import type {
 const EASTMONEY_GLOBAL_URL = "https://push2.eastmoney.com/api/qt/clist/get";
 const EASTMONEY_ULIST_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get";
 const EASTMONEY_FIELDS = "f12,f14,f2,f3,f4,f17,f15,f16,f18,f7,f124";
-const EASTMONEY_A50_FUTURE_FIELDS = "f12,f14,f2,f3,f4,f17,f15,f16,f18";
+const EASTMONEY_A50_FUTURE_FIELDS = "f12,f14,f2,f3,f4,f17,f15,f16,f18,f124";
 const EASTMONEY_GLOBAL_SOURCE_URL = "https://quote.eastmoney.com/center/gridlist.html";
 const SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
 const SEC_COMPANY_SEARCH_URL = "https://www.sec.gov/edgar/browse/?CIK=";
 const DEFAULT_CATALYST_WATCH_NOTE = "未配置盘前重大催化关键词；系统不会把传闻或示例事件纳入盘前风险温度。";
+const GLOBAL_MARKET_STALE_MINUTES = 90;
+const CALENDAR_STALE_MINUTES = 24 * 60;
 
 const CORE_CODES = new Set([
   "NDX",
@@ -37,6 +44,29 @@ const CORE_CODES = new Set([
   "SXXP",
   "GDAXI"
 ]);
+
+const REQUIRED_MARKET_COVERAGE: Array<{ label: string; codes: string[]; warning: string }> = [
+  {
+    label: "A50期指",
+    codes: ["CN00Y"],
+    warning: "未取得 A50期指当月连续（CN00Y），港股/A50 维度只能降级参考。"
+  },
+  {
+    label: "美股科技/权重",
+    codes: ["NDX", "NDX100", "SPX"],
+    warning: "未取得纳指/纳指100/标普500中的任一关键指数，美股科技风险温度只能降级参考。"
+  },
+  {
+    label: "港股承压参照",
+    codes: ["HSI", "HSCEI"],
+    warning: "未取得恒生指数/国企指数，港股对 A 股开盘风险偏好的参考不足。"
+  },
+  {
+    label: "美元指数",
+    codes: ["UDI"],
+    warning: "未取得美元指数，汇率/全球风险偏好维度只能降级参考。"
+  }
+];
 
 const CODE_GROUPS: Record<string, PremarketMarketItem["group"]> = {
   NDX: "us",
@@ -66,15 +96,31 @@ type RawEastmoneyGlobal = {
   f16?: number | string;
   f17?: number | string;
   f18?: number | string;
+  f124?: number | string;
 };
 
 export async function buildPremarketSnapshot(): Promise<PremarketSnapshot> {
   const fetchedAt = new Date().toISOString();
-  const [marketResult, calendarResult, catalystResult] = await Promise.allSettled([fetchGlobalMarkets(), fetchCalendarEvents(), fetchCatalystEvents()]);
+  const session = inferMarketSessionContext(fetchedAt);
+  const sessionTrace: PremarketSnapshot["session"] = {
+    phase: session.phase,
+    phaseLabel: session.phaseLabel,
+    analysisMode: session.analysisMode,
+    isTradingDay: session.isTradingDay,
+    isTradingSession: session.isTradingSession,
+    canUseRealtimeQuotes: session.canUseRealtimeQuotes,
+    canUseAuctionQuotes: session.canUseAuctionQuotes,
+    expectedDataBasis: session.expectedDataBasis,
+    effectiveTradeDate: effectiveTradeDateForSession(fetchedAt, session),
+    dataFreshnessHint: session.dataFreshnessHint,
+    checkedAt: fetchedAt
+  };
+  const [marketResult, calendarResult, catalystResult] = await Promise.allSettled([fetchGlobalMarkets(), calendarEventProvider.fetchNearTermEvents(), fetchCatalystEvents()]);
   const markets = marketResult.status === "fulfilled" ? marketResult.value.markets : [];
   const marketWarnings = marketResult.status === "fulfilled" ? marketResult.value.warnings : [formatError(marketResult.reason)];
   const calendarEvents = calendarResult.status === "fulfilled" ? calendarResult.value.events : [];
   const calendarWarnings = calendarResult.status === "fulfilled" ? calendarResult.value.warnings : [formatError(calendarResult.reason)];
+  const calendarSourceStatus: CalendarSourceStatus = calendarResult.status === "fulfilled" ? calendarResult.value.sourceStatus : "failed";
   const catalystEvents = catalystResult.status === "fulfilled" ? catalystResult.value.events : [];
   const catalystWatchConfig = catalystResult.status === "fulfilled" ? catalystResult.value.config : getCatalystWatchConfig();
   const catalystWarnings = catalystResult.status === "fulfilled" ? catalystResult.value.warnings : [formatError(catalystResult.reason)];
@@ -82,24 +128,50 @@ export async function buildPremarketSnapshot(): Promise<PremarketSnapshot> {
   const temperature = clamp(Math.round(buckets.reduce((sum, bucket) => sum + bucket.score, 0)), 0, 100);
   const riskLevel = classifyRiskLevel(temperature);
   const riskFlags = buildRiskFlags(markets, calendarEvents, buckets, catalystEvents);
+  const sourceTraces = buildSourceTraces(fetchedAt, markets, calendarEvents, catalystEvents, marketWarnings, calendarWarnings, catalystWarnings, sessionTrace, calendarSourceStatus);
+  const dataQuality = evaluatePremarketDataQuality(sourceTraces);
+  const actionability = evaluatePremarketActionability(dataQuality, sourceTraces);
+  const temperatureReliability = evaluatePremarketTemperatureReliability(buckets, sourceTraces, actionability);
 
   return {
     fetchedAt,
     dataBasis: "东方财富全球指数实时/延迟行情 + westock 宏观投资日历 + SEC 公司事实校验",
+    session: sessionTrace,
     temperature,
     riskLevel,
     emotionLabel: riskLevelLabel(riskLevel),
     summary: buildSummary(temperature, riskLevel, riskFlags),
     markets,
     calendarEvents,
+    calendarSummary: buildCalendarSummary(calendarEvents),
     catalystEvents,
     catalystWatchConfig,
     buckets,
     riskFlags,
     watchItems: buildWatchItems(markets, riskLevel),
-    sourceTraces: buildSourceTraces(fetchedAt, markets, calendarEvents, catalystEvents, marketWarnings, calendarWarnings, catalystWarnings),
-    warnings: [...marketWarnings, ...calendarWarnings, ...catalystWarnings].filter(Boolean)
+    sourceTraces,
+    dataQuality,
+    actionability,
+    temperatureReliability,
+    warnings: buildPremarketWarnings(marketWarnings, calendarWarnings, catalystWarnings, catalystWatchConfig)
   };
+}
+
+function buildCalendarSummary(events: PremarketCalendarEvent[]) {
+  return {
+    total: events.length,
+    today: events.filter((event) => calendarDayDistance(event.date) === 0).length,
+    tomorrow: events.filter((event) => calendarDayDistance(event.date) === 1).length,
+    pending: events.filter((event) => event.timing === "pending" || event.timing === "upcoming").length,
+    released: events.filter((event) => event.timing === "released").length,
+    highRelevance: events.filter((event) => event.relevance === "high").length,
+    mediumRelevance: events.filter((event) => event.relevance === "medium").length,
+    backgroundOnly: events.filter((event) => event.relevance === "low").length
+  };
+}
+
+function buildPremarketWarnings(marketWarnings: string[], calendarWarnings: string[], catalystWarnings: string[], catalystWatchConfig: PremarketCatalystWatchConfig) {
+  return [...marketWarnings, ...calendarWarnings, ...(catalystWatchConfig.enabled ? catalystWarnings : [])].filter(Boolean);
 }
 
 function buildSourceTraces(
@@ -109,26 +181,74 @@ function buildSourceTraces(
   catalystEvents: PremarketCatalystEvent[],
   marketWarnings: string[],
   calendarWarnings: string[],
-  catalystWarnings: string[]
+  catalystWarnings: string[],
+  sessionTrace: PremarketSnapshot["session"],
+  calendarSourceStatus: CalendarSourceStatus = "ok"
 ): PremarketSourceTrace[] {
+  const newestMarketUpdate = newestIso(markets.map((market) => market.updatedAt).filter(Boolean) as string[]);
+  const globalMarketFreshness = newestMarketUpdate ? minutesBetween(newestMarketUpdate, fetchedAt) : undefined;
+  const globalMarketStaleAfterMinutes = globalMarketStaleAfterMinutesForSession(sessionTrace.phase);
+  const globalMarketStale = typeof globalMarketFreshness === "number" && globalMarketFreshness > globalMarketStaleAfterMinutes;
+  const calendarTraceStatus: PremarketSourceTrace["status"] =
+    calendarSourceStatus === "failed"
+      ? "failed"
+      : calendarSourceStatus === "partial" || calendarWarnings.length
+        ? "partial"
+        : "ok";
+
   return [
+    {
+      key: "a_share_session",
+      label: "A股交易时段",
+      status: "ok",
+      usage: "score_input",
+      usageLabel: "计入盘前约束",
+      source: "本地交易日历 + 北京时间时段识别",
+      fetchedAt,
+      dataUpdatedAt: sessionTrace.checkedAt,
+      freshnessMinutes: 0,
+      staleAfterMinutes: 10,
+      critical: true,
+      impact: sessionTrace.isTradingDay
+        ? `${sessionTrace.phaseLabel}，${sessionTrace.expectedDataBasis}，有效交易日 ${sessionTrace.effectiveTradeDate}。`
+        : `今天 A 股闭市：只做研究计划，不输出盘中买卖判断；有效交易日 ${sessionTrace.effectiveTradeDate}。`,
+      records: 1,
+      warnings: []
+    },
     {
       key: "eastmoney_global",
       label: "外围指数",
-      status: markets.length ? (marketWarnings.length ? "partial" : "ok") : "failed",
+      status: markets.length ? (marketWarnings.length || globalMarketStale ? "partial" : "ok") : "failed",
+      usage: "score_input",
+      usageLabel: "计入温度",
       source: "东方财富全球指数",
       sourceUrl: EASTMONEY_GLOBAL_SOURCE_URL,
       fetchedAt,
+      dataUpdatedAt: newestMarketUpdate,
+      freshnessMinutes: globalMarketFreshness,
+      staleAfterMinutes: globalMarketStaleAfterMinutes,
+      critical: true,
+      impact: "用于盘前外围温度、风险提示和开盘观察清单；不能替代 A 股开盘后的宽度/主线确认。",
       records: markets.length,
-      warnings: marketWarnings
+      warnings: [
+        ...marketWarnings,
+        ...(newestMarketUpdate && globalMarketStale ? [`外围指数最新时间 ${formatCnDateTime(newestMarketUpdate)}，已超过 ${globalMarketStaleAfterMinutes} 分钟，需降级参考。`] : [])
+      ]
     },
     {
       key: "westock_calendar",
       label: "宏观日历",
-      status: calendarEvents.length ? (calendarWarnings.length ? "partial" : "ok") : "failed",
+      status: calendarTraceStatus,
+      usage: "score_input",
+      usageLabel: "计入事件权重",
       source: "westock-data calendar",
       command: "calendar <date> --country 1/2 --indicator 1 --limit 20",
       fetchedAt,
+      dataUpdatedAt: fetchedAt,
+      freshnessMinutes: 0,
+      staleAfterMinutes: CALENDAR_STALE_MINUTES,
+      critical: true,
+      impact: "用于识别今日/近期中美和宏观事件风险；没有实际值时只作为事件提醒。",
       records: calendarEvents.length,
       warnings: calendarWarnings
     },
@@ -136,9 +256,16 @@ function buildSourceTraces(
       key: "sec_company_filings",
       label: "重大催化",
       status: catalystEvents.length ? (catalystWarnings.length ? "partial" : "ok") : "unavailable",
+      usage: catalystEvents.length ? "watch_only" : "excluded",
+      usageLabel: catalystEvents.length ? "只做观察线索" : "未配置，排除",
       source: "SEC company ticker index",
       sourceUrl: SEC_COMPANY_TICKERS_URL,
       fetchedAt,
+      dataUpdatedAt: fetchedAt,
+      freshnessMinutes: 0,
+      staleAfterMinutes: CALENDAR_STALE_MINUTES,
+      critical: false,
+      impact: "只做已配置关键词的公司事实校验，不作为默认新闻流。",
       records: catalystEvents.length,
       warnings: catalystWarnings
     },
@@ -146,8 +273,12 @@ function buildSourceTraces(
       key: "official_news",
       label: "新闻情绪",
       status: "unavailable",
+      usage: "excluded",
+      usageLabel: "未接入，排除",
       source: "待接入授权新闻源",
       fetchedAt,
+      critical: false,
+      impact: "新闻情绪未接入授权源前不参与温度扣分，避免用传闻污染规则。",
       records: 0,
       warnings: ["未配置授权新闻源：新闻情绪不参与温度计扣分，也不会被当作交易证据。"]
     }
@@ -187,8 +318,15 @@ async function fetchGlobalMarkets() {
 
   return {
     markets,
-    warnings: markets.length ? [] : ["东方财富全球指数未返回核心外围市场数据。"]
+    warnings: markets.length ? buildMarketCoverageWarnings(markets) : ["东方财富全球指数未返回核心外围市场数据。"]
   };
+}
+
+function buildMarketCoverageWarnings(markets: PremarketMarketItem[]) {
+  const codes = new Set(markets.map((market) => market.code));
+  return REQUIRED_MARKET_COVERAGE
+    .filter((coverage) => !coverage.codes.some((code) => codes.has(code)))
+    .map((coverage) => coverage.warning);
 }
 
 async function fetchA50FutureMarket(): Promise<PremarketMarketItem | null> {
@@ -214,6 +352,7 @@ async function fetchA50FutureMarket(): Promise<PremarketMarketItem | null> {
 
 function toMarketItem(row: RawEastmoneyGlobal): PremarketMarketItem {
   const code = String(row.f12);
+  const updatedAt = eastmoneyTimestampToIso(row.f124);
   return {
     code,
     name: String(row.f14 ?? row.f12),
@@ -226,6 +365,7 @@ function toMarketItem(row: RawEastmoneyGlobal): PremarketMarketItem {
     prevClose: toNumberOrNull(row.f18),
     source: "eastmoney_global",
     sourceUrl: EASTMONEY_GLOBAL_SOURCE_URL,
+    updatedAt,
     dataType: marketDataType(code),
     group: CODE_GROUPS[code] ?? "other"
   };
@@ -237,28 +377,6 @@ function mergeMarkets(markets: PremarketMarketItem[]) {
     if (!byCode.has(market.code)) byCode.set(market.code, market);
   }
   return Array.from(byCode.values());
-}
-
-async function fetchCalendarEvents() {
-  const today = new Date().toISOString().slice(0, 10);
-  const [china, us] = await Promise.all([
-    westockAdapter.getCalendar(today, 1, 1, 20, { timeoutMs: 60000, retries: 1 }),
-    westockAdapter.getCalendar(today, 2, 1, 20, { timeoutMs: 60000, retries: 1 })
-  ]);
-  const rows = [...firstTableRows(china), ...firstTableRows(us)];
-  const events = rows
-    .map(toCalendarEvent)
-    .filter((event): event is PremarketCalendarEvent => Boolean(event))
-    .filter((event) => event.weight >= 2)
-    .slice(0, 20);
-  return {
-    events,
-    warnings: [
-      ...(china.status === "failed" ? china.warnings : []),
-      ...(us.status === "failed" ? us.warnings : []),
-      ...(!events.length ? ["westock 投资日历未返回中美高权重事件。"] : [])
-    ]
-  };
 }
 
 async function fetchCatalystEvents(): Promise<{ events: PremarketCatalystEvent[]; warnings: string[]; config: PremarketCatalystWatchConfig }> {
@@ -328,16 +446,7 @@ function buildBuckets(markets: PremarketMarketItem[], events: PremarketCalendarE
     scoreBucket("asia", "亚太市场", 20, markets.filter((item) => item.group === "asia")),
     scoreBucket("hkA50", "港股/A50期指", 15, markets.filter((item) => item.group === "hk_cn")),
     scoreBucket("fx", "美元与汇率", 10, markets.filter((item) => item.group === "fx"), true),
-    scoreCalendar(events),
-    {
-      key: "news",
-      label: "新闻情绪",
-      score: 10,
-      maxScore: 10,
-      state: "missing",
-      note: "第一版暂不抓取非授权新闻流，后续接入正式新闻源后再参与扣分。",
-      evidence: []
-    }
+    scoreCalendar(events)
   ];
 }
 
@@ -371,21 +480,34 @@ function scoreBucket(key: string, label: string, maxScore: number, items: Premar
 }
 
 function scoreCalendar(events: PremarketCalendarEvent[]): PremarketScoreBucket {
-  const high = events.filter((event) => event.weight >= 3);
+  const scoredEvents = events.filter((event) => event.relevance !== "low");
+  const high = scoredEvents.filter((event) => event.relevance === "high");
+  const todayEvents = scoredEvents.filter((event) => calendarDayDistance(event.date) === 0);
+  const tomorrowEvents = scoredEvents.filter((event) => calendarDayDistance(event.date) === 1);
   const maxScore = 20;
   if (!events.length) {
     return { key: "calendar", label: "事件日历", score: 13, maxScore, state: "missing", note: "未获取到高权重财经事件，保持中性偏保守。", evidence: [] };
   }
-  const deduction = Math.min(12, high.length * 4 + Math.max(0, events.length - high.length) * 1.5);
+  const todayPressure = todayEvents.reduce((sum, event) => sum + calendarEventPressure(event), 0);
+  const tomorrowPressure = tomorrowEvents.reduce((sum, event) => sum + calendarEventPressure(event) * 0.6, 0);
+  const laterPressure = scoredEvents
+    .filter((event) => {
+      const distance = calendarDayDistance(event.date);
+      return distance > 1;
+    })
+    .reduce((sum, event) => sum + calendarEventPressure(event) * 0.25, 0);
+  const deduction = Math.min(12, todayPressure * 1.5 + tomorrowPressure + laterPressure);
   const score = Math.round(maxScore - deduction);
   return {
     key: "calendar",
     label: "事件日历",
     score,
     maxScore,
-    state: high.length >= 2 ? "risk" : high.length === 1 ? "watch" : "neutral",
-    note: `未来事件 ${events.length} 条，高权重 ${high.length} 条。`,
-    evidence: events.slice(0, 6).map((event) => `${event.date} ${event.time} ${event.country}：${event.content}`)
+    state: todayEvents.some((event) => event.relevance === "high") || todayEvents.length >= 4 ? "risk" : tomorrowEvents.some((event) => event.relevance === "high") || high.length >= 2 ? "watch" : "neutral",
+    note: `近7日事件 ${events.length} 条，计入温度 ${scoredEvents.length} 条，今日 ${todayEvents.length} 条，明日 ${tomorrowEvents.length} 条，高相关 ${high.length} 条。`,
+    evidence: [...scoredEvents, ...events.filter((event) => event.relevance === "low")]
+      .slice(0, 6)
+      .map((event) => `${event.date} ${event.time} ${event.country}：${event.content}，${formatCalendarRelevanceForText(event.relevance)}`)
   };
 }
 
@@ -395,8 +517,8 @@ function buildRiskFlags(markets: PremarketMarketItem[], events: PremarketCalenda
     if ((item.changePct ?? 0) <= -4) flags.push(`${item.name} 跌幅超过 4%，外围风险显著升温。`);
     else if ((item.changePct ?? 0) <= -2) flags.push(`${item.name} 跌幅超过 2%，开盘需防风险偏好下行。`);
   }
-  const highEvents = events.filter((event) => event.weight >= 3);
-  if (highEvents.length) flags.push(`今日/近期有 ${highEvents.length} 条高权重宏观事件，盘前不宜忽略事件冲击。`);
+  const highEvents = events.filter((event) => event.relevance === "high" && calendarDayDistance(event.date) <= 1);
+  if (highEvents.length) flags.push(`今日/明日有 ${highEvents.length} 条高相关宏观事件，盘前不宜忽略事件冲击。`);
   const confirmedCatalysts = catalystEvents.filter((event) => event.status === "confirmed" && event.weight >= 3);
   if (confirmedCatalysts.length) flags.push(`今日/近期有 ${confirmedCatalysts.length} 条高权重公司/产业催化，需要单独核对相关主线。`);
   const weakBuckets = buckets.filter((bucket) => bucket.state === "risk");
@@ -437,36 +559,96 @@ function classifyRiskLevel(score: number): PremarketRiskLevel {
   return "risk_off";
 }
 
-function toCalendarEvent(row: Record<string, ParsedCell>): PremarketCalendarEvent | null {
-  const date = stringCell(row.date);
-  const content = stringCell(row.Content);
-  if (!date || !content) return null;
-  return {
-    date,
-    time: stringCell(row.time) ?? "00:00",
-    country: stringCell(row.CountryName) ?? "未知",
-    weight: numberCell(row.Weightiness) ?? 1,
-    content,
-    previous: stringCell(row.Previous),
-    forecast: stringCell(row.Predict),
-    actual: stringCell(row.CurrentValue),
-    source: "westock_calendar"
-  };
+function calendarEventPressure(event: PremarketCalendarEvent) {
+  const base = Math.max(1, Math.min(3, event.weight));
+  if (event.relevance === "high") return base;
+  if (event.relevance === "medium") return base * 0.45;
+  return 0;
 }
 
-function stringCell(value: ParsedCell | undefined) {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === "object" && !Array.isArray(value) && "invalid" in value) return undefined;
-  return String(value);
+function formatCalendarRelevanceForText(value?: PremarketCalendarEvent["relevance"]) {
+  if (value === "high") return "高相关";
+  if (value === "medium") return "中相关";
+  return "背景项";
 }
 
-function numberCell(value: ParsedCell | undefined) {
-  if (typeof value === "number") return value;
-  if (typeof value === "string" && value) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
+function calendarDayDistance(dateText: string) {
+  const today = localDateKey(new Date());
+  const target = dateText.slice(0, 10);
+  const todayTime = Date.parse(`${today}T00:00:00+08:00`);
+  const targetTime = Date.parse(`${target}T00:00:00+08:00`);
+  if (!Number.isFinite(todayTime) || !Number.isFinite(targetTime)) return 999;
+  return Math.round((targetTime - todayTime) / 86_400_000);
+}
+
+function localDateKey(date: Date) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(date);
+}
+
+function eastmoneyTimestampToIso(value: unknown) {
+  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(number) || number <= 0) return undefined;
+  const milliseconds = number > 9_999_999_999 ? number : number * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function newestIso(values: string[]) {
+  return values.filter(Boolean).sort().at(-1);
+}
+
+function minutesBetween(leftIso: string, rightIso: string) {
+  const left = Date.parse(leftIso);
+  const right = Date.parse(rightIso);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return undefined;
+  return Math.max(0, Math.round((right - left) / 60_000));
+}
+
+function globalMarketStaleAfterMinutesForSession(phase: string) {
+  if (phase === "premarket" || phase === "call_auction") return GLOBAL_MARKET_STALE_MINUTES;
+  if (phase === "morning" || phase === "afternoon" || phase === "closing_auction") return 180;
+  if (phase === "non_trading_day") return 72 * 60;
+  return 12 * 60;
+}
+
+export function __testPremarketReliability(input: {
+  fetchedAt: string;
+  markets: PremarketMarketItem[];
+  calendarEvents: PremarketCalendarEvent[];
+  buckets: PremarketScoreBucket[];
+  sessionTrace: PremarketSnapshot["session"];
+  marketWarnings?: string[];
+  calendarWarnings?: string[];
+  catalystWarnings?: string[];
+  calendarSourceStatus?: CalendarSourceStatus;
+}) {
+  const sourceTraces = buildSourceTraces(
+    input.fetchedAt,
+    input.markets,
+    input.calendarEvents,
+    [],
+    input.marketWarnings ?? [],
+    input.calendarWarnings ?? [],
+    input.catalystWarnings ?? [],
+    input.sessionTrace,
+    input.calendarSourceStatus ?? "ok"
+  );
+  const dataQuality = evaluatePremarketDataQuality(sourceTraces);
+  const actionability = evaluatePremarketActionability(dataQuality, sourceTraces);
+  const temperatureReliability = evaluatePremarketTemperatureReliability(input.buckets, sourceTraces, actionability);
+  return { sourceTraces, dataQuality, actionability, temperatureReliability };
+}
+
+function formatCnDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
 }
 
 function toNumberOrNull(value: unknown) {
@@ -482,7 +664,7 @@ function marketDataType(code: string): PremarketMarketItem["dataType"] {
 }
 
 function formatMarketEvidence(item: PremarketMarketItem) {
-  return `${item.name} ${formatPct(item.changePct)}`
+  return `${item.name} ${formatPct(item.changePct)}`;
 }
 
 function formatPct(value: number | null) {

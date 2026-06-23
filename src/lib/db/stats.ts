@@ -5,6 +5,7 @@ import { dbGet } from "@/lib/db/client";
 
 const OBSERVED_TABLES = [
   "analysis_reports",
+  "analysis_report_summaries",
   "market_snapshots",
   "sector_snapshots",
   "stock_signal_snapshots",
@@ -22,6 +23,7 @@ export type ObservedTable = (typeof OBSERVED_TABLES)[number];
 
 const TIME_COLUMN_BY_TABLE: Record<ObservedTable, string | null> = {
   analysis_reports: "createdAt",
+  analysis_report_summaries: "createdAt",
   market_snapshots: "createdAt",
   sector_snapshots: "createdAt",
   stock_signal_snapshots: "createdAt",

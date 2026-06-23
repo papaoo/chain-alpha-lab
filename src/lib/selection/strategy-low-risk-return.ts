@@ -1,6 +1,6 @@
 import { loadCandidatePool, latestDisplayableReport, refreshCandidatePool } from "@/lib/selection/candidate-pool";
 import { calculateSelectionBlockerPenalty, decideActionByScore, normalizeSelectionBlockers } from "@/lib/selection/risk-utils";
-import { booleanParam, factor, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText } from "@/lib/selection/scoring-utils";
+import { booleanParam, factor, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText, selectionDataFreshness, selectionRuntimeSnapshot } from "@/lib/selection/scoring-utils";
 import type {
   SelectionPick,
   SelectionPickScoreFactor,
@@ -118,6 +118,8 @@ function scoreLowRiskCandidate(candidate: StockCandidate, parameters: Record<str
     sectorName: candidate.sectorName,
     price: candidate.price ?? candidate.quote?.latest,
     changePct,
+    dataFreshness: selectionDataFreshness(candidate),
+    runtimeSnapshot: selectionRuntimeSnapshot(candidate),
     score,
     tier: tierFromScore(score),
     action,

@@ -1,5 +1,6 @@
 "use client";
 
+import { cleanDisplayText } from "@/lib/display/text";
 import type { SelectionStrategyDefinition } from "@/lib/selection/types";
 
 type SelectionParameter = SelectionStrategyDefinition["parameters"][number];
@@ -32,10 +33,10 @@ function ParameterControl({ param, value, onChange }: { param: SelectionParamete
     <div className="rounded-lg border border-line bg-bg/50 p-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium">{param.label}</p>
-          <p className="mt-1 text-xs leading-5 text-muted">{param.description}</p>
+          <p className="text-sm font-medium">{safeText(param.label)}</p>
+          <p className="mt-1 text-xs leading-5 text-muted">{safeText(param.description)}</p>
         </div>
-        {param.unit ? <span className="rounded border border-line px-1.5 py-0.5 text-[10px] text-muted">{param.unit}</span> : null}
+        {param.unit ? <span className="rounded border border-line px-1.5 py-0.5 text-[10px] text-muted">{safeText(param.unit)}</span> : null}
       </div>
       <div className="mt-3">
         {param.type === "boolean" ? (
@@ -46,7 +47,7 @@ function ParameterControl({ param, value, onChange }: { param: SelectionParamete
               checked={Boolean(value)}
               onChange={(event) => onChange(event.target.checked)}
             />
-            {value ? "开启" : "关闭"}
+            {value ? "已开启" : "已关闭"}
           </label>
         ) : param.type === "select" ? (
           <select
@@ -59,7 +60,7 @@ function ParameterControl({ param, value, onChange }: { param: SelectionParamete
           >
             {param.options?.map((option) => (
               <option key={String(option.value)} value={String(option.value)}>
-                {option.label}
+                {safeText(option.label)}
               </option>
             ))}
           </select>
@@ -94,9 +95,13 @@ function NumberInput({ value, min, max, onChange }: { value: unknown; min?: numb
 }
 
 function formatParameterValue(value: unknown, unit?: string) {
-  if (Array.isArray(value)) return `${value[0] ?? "不限"} - ${value[1] ?? "不限"}${unit ?? ""}`;
+  if (Array.isArray(value)) return `${value[0] ?? "不限"} - ${value[1] ?? "不限"}${safeText(unit)}`;
   if (typeof value === "boolean") return value ? "开启" : "关闭";
   if (value === "strategy_default") return "按策略默认";
-  if (value === null) return "不限";
-  return `${value}${unit ?? ""}`;
+  if (value === null || value === undefined || value === "") return "不限";
+  return `${value}${safeText(unit)}`;
+}
+
+function safeText(value?: string | null) {
+  return cleanDisplayText(value) ?? value ?? "";
 }

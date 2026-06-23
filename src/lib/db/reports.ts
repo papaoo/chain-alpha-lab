@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { dbAll, dbGet, dbRun } from "@/lib/db/client";
+import { persistAnalysisReportSummary } from "@/lib/db/reportSummaries";
 import { getStockMemories, getStockMemoriesAsOf } from "@/lib/db/stockMemory";
 import { normalizeSectorName } from "@/lib/sector/normalization";
 import type {
@@ -37,6 +38,7 @@ export function saveAnalysisReport(report: Omit<AnalysisReport, "id">) {
     },
     { label: "analysis_reports.insert", slowMs: 300 }
   );
+  persistAnalysisReportSummary({ ...report, id });
 
   return id;
 }
@@ -91,6 +93,7 @@ export function getAnalysisReport(id: string, memoryMode: ReportMemoryMode = "as
 
   return {
     id: row.id,
+    schemaVersion: factPackage.schemaVersion,
     reportType: row.reportType,
     title: row.title,
     summary: row.summary,

@@ -109,8 +109,8 @@ function normalizeAgentReports(raw: unknown, allowedCodes: Set<string>, allowedR
       summary: stringValue((item as any)?.summary) || "未给出摘要。",
       topPicks: filterCodes((item as any)?.topPicks, allowedCodes),
       avoidStocks: filterCodes((item as any)?.avoidStocks, allowedCodes),
-      missingData: Array.from(new Set(missingData)).slice(0, 8),
-      stockOpinions: normalizeStockOpinions((item as any)?.stockOpinions, allowedCodes, allowedRefs, errors),
+      missingData: Array.from(new Set(missingData)).slice(0, 4),
+      stockOpinions: normalizeStockOpinions((item as any)?.stockOpinions, allowedCodes, allowedRefs, errors).slice(0, 2),
       evidenceRefs: refs,
       raw: item
     }];
@@ -119,7 +119,7 @@ function normalizeAgentReports(raw: unknown, allowedCodes: Set<string>, allowedR
 
 function normalizeStockOpinions(raw: unknown, allowedCodes: Set<string>, allowedRefs: Set<string>, errors: string[]) {
   if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 20).flatMap((item): SelectionAgentReport["stockOpinions"] => {
+  return raw.slice(0, 10).flatMap((item): SelectionAgentReport["stockOpinions"] => {
     const code = stringValue((item as any)?.code);
     if (!allowedCodes.has(code)) {
       if (code) errors.push(`Agent 输出了候选池外股票：${code}`);
@@ -136,7 +136,7 @@ function normalizeStockOpinions(raw: unknown, allowedCodes: Set<string>, allowed
       recommendation: normalizeOpinion((item as any)?.recommendation),
       confidence: normalizeConfidence((item as any)?.confidence),
       logic: stringValue((item as any)?.logic) || "未给出逻辑。",
-      riskFlags: Array.from(new Set(riskFlags)).slice(0, 6),
+      riskFlags: Array.from(new Set(riskFlags)).slice(0, 4),
       evidenceRefs: refs
     }];
   });
@@ -154,7 +154,7 @@ function normalizeFinalReview(
     return null;
   }
   const finalPicksRaw = Array.isArray((raw as any).finalPicks) ? (raw as any).finalPicks : [];
-  const finalPicks = finalPicksRaw.slice(0, 20).flatMap((item: any): SelectionFinalReview["finalPicks"] => {
+  const finalPicks = finalPicksRaw.slice(0, 6).flatMap((item: any): SelectionFinalReview["finalPicks"] => {
     const code = stringValue(item?.code);
     if (!allowedCodes.has(code)) {
       if (code) errors.push(`总评审输出了候选池外股票：${code}`);
@@ -175,8 +175,8 @@ function normalizeFinalReview(
       logic: stringValue(item?.logic) || "未给出综合逻辑。",
       risk: stringValue(item?.risk) || "需继续观察风险条件。",
       suggestedPositionPct: normalizePosition(item?.suggestedPositionPct, normalizeFinalRecommendation(item?.recommendation)),
-      watchConditions: stringArray(item?.watchConditions, 6),
-      invalidConditions: stringArray(item?.invalidConditions, 6),
+      watchConditions: stringArray(item?.watchConditions, 3),
+      invalidConditions: stringArray(item?.invalidConditions, 3),
       evidenceRefs: refs
     }];
   });
@@ -218,7 +218,7 @@ function filterEvidenceRefs(value: unknown, allowedRefs: Set<string>) {
 }
 
 function normalizeStatus(value: unknown): SelectionAgentStatus {
-  return value === "disabled" || value === "rejected" || value === "failed" ? value : "success";
+  return value === "disabled" || value === "skipped" || value === "rejected" || value === "failed" ? value : "success";
 }
 
 function normalizeOpinion(value: unknown): SelectionAgentReport["stockOpinions"][number]["recommendation"] {

@@ -257,11 +257,18 @@ export function compactFactPackageForLlm(factPackage: FactPackage): FactPackage 
   const candidates = selectedCandidates.map(compactCandidateForLlm);
   const allowedRefs = new Set<string>([
     "session.market.phase",
+    "premarket.risk.overlay",
+    "audit.constraints",
+    "audit.dataSource.warnings",
+    "audit.dataSource.status",
+    "audit.llm.errors",
     ...factPackage.market.facts.map((fact) => fact.factId),
     ...factPackage.market.indices.flatMap((index) => index.facts.map((fact) => fact.factId)),
     ...factPackage.sectors.flatMap((sector) => sector.facts.map((fact) => fact.factId)),
     ...candidates.flatMap((candidate) => candidate.evidenceRefs),
     ...(factPackage.marketContext?.facts.map((fact) => fact.factId) ?? []),
+    ...factPackage.facts.filter((fact) => fact.factId.startsWith("audit.")).map((fact) => fact.factId),
+    ...factPackage.facts.filter((fact) => fact.factId.startsWith("premarket.")).map((fact) => fact.factId),
     ...factPackage.facts
       .filter((fact) => fact.factId.startsWith("memory.stock."))
       .filter((fact) => candidates.some((candidate) => fact.factId.includes(`.${candidate.code.toLowerCase()}.`)))

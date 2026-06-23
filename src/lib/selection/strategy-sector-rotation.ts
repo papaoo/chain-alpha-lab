@@ -1,6 +1,6 @@
 import { loadCandidatePool, latestDisplayableReport, refreshCandidatePool, type LatestAnalysisReport } from "@/lib/selection/candidate-pool";
 import { buildTradabilityPlan, calculateSelectionBlockerPenalty, decideActionByScore, normalizeSelectionBlockers } from "@/lib/selection/risk-utils";
-import { booleanParam, factor, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText } from "@/lib/selection/scoring-utils";
+import { booleanParam, factor, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText, selectionDataFreshness, selectionRuntimeSnapshot } from "@/lib/selection/scoring-utils";
 import type {
   SelectionPick,
   SelectionPickScoreFactor,
@@ -116,6 +116,8 @@ function scoreSectorRotationCandidate(
     sectorName: sector?.name ?? candidate.sectorName,
     price: candidate.price ?? candidate.quote?.latest,
     changePct,
+    dataFreshness: selectionDataFreshness(candidate),
+    runtimeSnapshot: selectionRuntimeSnapshot(candidate),
     score,
     tier: tierFromScore(score),
     action,

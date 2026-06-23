@@ -8,7 +8,12 @@ export interface JsonModelCallResult {
     provider: string;
     model: string;
     promptChars: number;
+    responseChars?: number;
     estimatedInputTokens: number;
+    estimatedOutputTokens?: number;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
     elapsedMs: number;
     status: "success" | "failed";
     errorCount: number;
@@ -78,7 +83,16 @@ export async function callJsonModel(input: {
       const error = `模型响应缺少 content：${responseText.slice(0, 800)}`;
       return { ok: false, error, metrics: buildMetrics("failed", startedAt, promptChars, [error]) };
     }
-    return { ok: true, text, metrics: buildMetrics("success", startedAt, promptChars) };
+    return {
+      ok: true,
+      text,
+      metrics: buildMetrics("success", startedAt, promptChars, [], {
+        responseChars: text.length,
+        promptTokens: numberValue(json?.usage?.prompt_tokens),
+        completionTokens: numberValue(json?.usage?.completion_tokens),
+        totalTokens: numberValue(json?.usage?.total_tokens)
+      })
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: message, metrics: buildMetrics("failed", startedAt, promptChars, [message]) };
@@ -87,13 +101,33 @@ export async function callJsonModel(input: {
   }
 }
 
-function buildMetrics(status: "success" | "failed", startedAt: number, promptChars: number, errors: string[] = []) {
+function buildMetrics(
+  status: "success" | "failed",
+  startedAt: number,
+  promptChars: number,
+  errors: string[] = [],
+  usage: {
+    responseChars?: number;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+  } = {}
+) {
   const settings = getRuntimeSettings();
+  const estimatedInputTokens = Math.ceil(promptChars / APPROX_CHARS_PER_TOKEN);
+  const estimatedOutputTokens = usage.responseChars !== undefined
+    ? Math.ceil(usage.responseChars / APPROX_CHARS_PER_TOKEN)
+    : undefined;
   return {
     provider: settings.providerName || settings.provider,
     model: settings.model,
     promptChars,
-    estimatedInputTokens: Math.ceil(promptChars / APPROX_CHARS_PER_TOKEN),
+    responseChars: usage.responseChars,
+    estimatedInputTokens,
+    estimatedOutputTokens,
+    promptTokens: usage.promptTokens,
+    completionTokens: usage.completionTokens,
+    totalTokens: usage.totalTokens,
     elapsedMs: Date.now() - startedAt,
     status,
     errorCount: errors.length,
@@ -101,6 +135,11 @@ function buildMetrics(status: "success" | "failed", startedAt: number, promptCha
     maxTokens: settings.maxTokens,
     temperature: settings.temperature
   };
+}
+
+function numberValue(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function buildChatCompletionsUrl(baseUrl: string): string {

@@ -1,5 +1,6 @@
 import type { AnalysisReport, LlmStatus } from "@/lib/types";
 import type { ApiResponse, CockpitWarning, MacroSnapshot, MarketSessionSnapshot, SentimentItem, Tone } from "@/components/StrategyCockpitTypes";
+import { fetchApiJson } from "@/lib/client/api";
 
 export function buildSentimentItems(report: AnalysisReport | null, macroSnapshot: MacroSnapshot | null): SentimentItem[] {
   const market = report?.ruleResult.market;
@@ -105,10 +106,7 @@ export function scoreTone(score: number, max: number): Tone {
 }
 
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<ApiResponse<T>> {
-  const response = await fetch(url, init);
-  const json = (await response.json()) as ApiResponse<T>;
-  if (!response.ok || !json.success) throw new Error(json.error?.message ?? `请求失败：${url}`);
-  return json;
+  return fetchApiJson<T>(url, init);
 }
 
 export function buildMacroItems(snapshot: MacroSnapshot | null, status: "loading" | "ready" | "failed") {

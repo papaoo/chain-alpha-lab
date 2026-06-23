@@ -1,4 +1,5 @@
 import type { DeepSeekReport, FactPackage, ModelAuditFeedback, StockCandidate } from "../types";
+import { normalizeDeepSeekOutput } from "./normalize";
 import { deepSeekReportSchema, degradedActionValues, modelAuditFeedbackSchema } from "./schema";
 
 export interface LlmValidationResult {
@@ -42,7 +43,8 @@ export function parseAndValidateDeepSeekOutput(rawOutput: string, factPackage: F
   const parsed = parseJsonOnly(rawOutput);
   if (parsed.ok === false) return { ok: false, report: null, errors: parsed.errors };
 
-  const schemaResult = deepSeekReportSchema.safeParse(parsed.value);
+  const normalized = normalizeDeepSeekOutput(parsed.value, factPackage);
+  const schemaResult = deepSeekReportSchema.safeParse(normalized.value);
   if (!schemaResult.success) {
     return {
       ok: false,

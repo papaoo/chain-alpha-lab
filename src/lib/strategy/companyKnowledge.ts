@@ -87,10 +87,12 @@ export function buildCompanyKnowledge(
 ): CompanyKnowledgeCard {
   const business = row?.business ? String(row.business) : "";
   const industry = row?.industry ? String(row.industry) : "";
+  const financialSummary = buildFinancialSummary(match.incomeHistory, match.balanceHistory, match.cashFlowHistory);
+  const hasFinancialEvidence = hasUsableFinancialEvidence(financialSummary);
   const missingFields: string[] = [];
   if (!business) missingFields.push("business");
   if (!industry) missingFields.push("industry");
-  if (!match.incomeHistory?.[0] || !match.balanceHistory?.[0] || !match.cashFlowHistory?.[0]) missingFields.push("financial");
+  if (!hasFinancialEvidence) missingFields.push("financial");
   if (!match.shareholder) missingFields.push("shareholder");
   const state = missingFields.length === 0 ? "sufficient" : missingFields.length < 2 ? "partial" : "missing";
   const industryChainPosition = inferIndustryChainPosition(business, industry, mainSector);
@@ -111,7 +113,6 @@ export function buildCompanyKnowledge(
       : business
         ? `主营业务与当前主线 ${mainSector} 缺少直接匹配证据，标记为主题偏离/待确认。`
         : "公司基础信息不足。");
-  const financialSummary = buildFinancialSummary(match.incomeHistory, match.balanceHistory, match.cashFlowHistory);
   const financialTrend = inferFinancialTrend(financialSummary);
   const shareholderSummary = buildShareholderSummary(match.shareholder);
   const earningsPreview = buildEarningsPreview(match.reserve);
@@ -146,4 +147,21 @@ export function buildCompanyKnowledge(
     sourceType: "mixed",
     missingFields
   };
+}
+
+function hasUsableFinancialEvidence(summary?: CompanyKnowledgeCard["financialSummary"]) {
+  if (!summary) return false;
+  return [
+    summary.revenue,
+    summary.netProfit,
+    summary.operatingCashFlow,
+    summary.grossMarginPct,
+    summary.netProfitMarginPct,
+    summary.debtRatioPct,
+    summary.roePct,
+    summary.revenueChangePct,
+    summary.netProfitChangePct,
+    summary.grossMarginChangePct,
+    summary.operatingCashFlowChangePct
+  ].some((value) => value !== undefined && Number.isFinite(value));
 }

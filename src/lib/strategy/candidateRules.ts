@@ -1,6 +1,6 @@
 import type { CandidateReviewRecord, Fact, MarketRuleResult, MarketSessionContext, SectorRuleResult, StockCandidate } from "@/lib/types";
 import { type BuildRuleInput } from "@/lib/strategy/support";
-import { pushFact, rowMap } from "@/lib/strategy/utils";
+import { pushFact, rowMapByNormalizedCode } from "@/lib/strategy/utils";
 import { compareCandidateSignalQuality } from "@/lib/strategy/candidateSignalQuality";
 import { buildCandidateSourceRows, buildSectorMembershipIndex } from "@/lib/strategy/candidateSources";
 import { buildShareholderMap, latestRowsByCode, rowsByCode } from "@/lib/strategy/companyKnowledge";
@@ -9,10 +9,10 @@ import { evaluateCandidateRow } from "@/lib/strategy/candidateEvaluationRules";
 
 export function buildCandidates(input: BuildRuleInput, session: MarketSessionContext, sectors: SectorRuleResult[], market: MarketRuleResult, facts: Fact[]): { candidates: StockCandidate[]; reviews: CandidateReviewRecord[] } {
   const candidateRows = buildCandidateSourceRows(input.hotStocks, input.sectorConstituents ?? [], sectors, facts).slice(0, 40);
-  const technicalRows = rowMap(input.stockTechnicals);
-  const fundRows = rowMap(input.stockFundFlows);
-  const profileRows = rowMap(input.stockProfiles);
-  const klineRows = rowMap(input.stockKlines, "symbol");
+  const technicalRows = rowMapByNormalizedCode(input.stockTechnicals, ["code"]);
+  const fundRows = rowMapByNormalizedCode(input.stockFundFlows, ["code", "SecuCode"]);
+  const profileRows = rowMapByNormalizedCode(input.stockProfiles, ["code", "symbol"]);
+  const klineRows = rowMapByNormalizedCode(input.stockKlines, ["symbol", "code"]);
   const incomeRows = rowsByCode(input.stockIncomeStatements, "symbol");
   const balanceRows = rowsByCode(input.stockBalanceSheets, "symbol");
   const cashFlowRows = rowsByCode(input.stockCashFlows, "symbol");

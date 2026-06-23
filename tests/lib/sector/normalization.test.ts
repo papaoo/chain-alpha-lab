@@ -34,4 +34,19 @@ describe("sector normalization", () => {
     expect(normalizeSectorName("大硅片")).toBe("半导体材料");
     expect(normalizeSectorName("电子树脂")).toBe("半导体材料");
   });
+
+  it("normalizes scarce-material themes without merging broad fallback industries", () => {
+    expect(normalizeSectorName("培育钻石概念")).toBe("金刚石");
+    expect(normalizeSectorName("工业金刚石")).toBe("金刚石");
+    expect(normalizeSectorName("有色(锆)")).toBe("有色锆");
+    expect(normalizeSectorName("氧氯化锆")).toBe("有色锆");
+    expect(sameSectorName("金刚石", "培育钻石")).toBe(true);
+    expect(sameSectorName("有色(锆)", "锆材料")).toBe(true);
+    expect(normalizeSectorName("锗镓概念")).toBe("锗镓");
+    expect(normalizeSectorName("有色(铋)")).toBe("有色铋");
+    expect(sameSectorName("金刚石", "非金属材料Ⅲ")).toBe(false);
+    expect(sameSectorName("有色(锆)", "小金属")).toBe(false);
+    expect(sameSectorName("锗镓", "小金属")).toBe(false);
+    expect(sameSectorName("有色铋", "小金属")).toBe(false);
+  });
 });

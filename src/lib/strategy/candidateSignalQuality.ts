@@ -23,13 +23,13 @@ export function evaluateCandidateSignalQuality(input: {
   reasons: string[];
 } {
   const actionScore = scoreSignalAction(input.action);
-  const strengthScore = Math.round(input.strengthScore * 0.42);
-  const buyPointScore = Math.round((input.buyPointEvaluation.score / 20) * 12);
+  const strengthScore = Math.round(input.strengthScore * 0.45);
+  const buyPointScore = Math.round((input.buyPointEvaluation.score / 20) * 14);
   const dataScore = input.dataCompleteness.level === "complete" ? 10 : input.dataCompleteness.level === "partial" ? 4 : -12;
   const attributionScore = scoreSignalAttribution(input.attribution);
   const roleScore = scoreSignalRole(input.role);
-  const activityScore = input.activity ? Math.round(input.activity.score * 0.08) : 0;
-  const marketScore = input.marketState === "tradable" ? 5 : input.marketState === "cautious" ? 2 : -6;
+  const activityScore = input.activity ? Math.round(input.activity.score * 0.09) : 0;
+  const marketScore = input.marketState === "tradable" ? 6 : input.marketState === "cautious" ? 3 : -6;
   const sectorScore = input.sectorStage === ZH.confirmed || input.sectorStage === ZH.accelerating
     ? 5
     : input.sectorStage === ZH.startup
@@ -45,12 +45,13 @@ export function evaluateCandidateSignalQuality(input: {
       : input.buyPointEvaluation.status === "待激活" && (input.role === ZH.leader || input.role === ZH.core)
         ? 5
         : 0;
-  const hardRiskPenalty =
+  const rawHardRiskPenalty =
     (input.trendState === "downtrend" || input.trendState === "below_ma20" ? 12 : 0) +
     (input.fundFlowState === "outflow" ? 12 : 0) +
     (input.attribution.shouldExclude ? 20 : 0) +
     (input.tradability.status === "涨停不可达" ? 12 : input.tradability.status === "接近涨停" ? 8 : input.tradability.status === "高位拉升" ? 5 : 0) +
     (input.riskFlags.length >= 6 ? 8 : input.riskFlags.length >= 3 ? 4 : 0);
+  const hardRiskPenalty = Math.min(35, rawHardRiskPenalty);
   const raw = actionScore + strengthScore + buyPointScore + dataScore + attributionScore + roleScore + activityScore + marketScore + sectorScore + pendingOpportunityBonus - hardRiskPenalty;
   const score = Math.max(0, Math.min(100, Math.round(raw)));
   const tier = inferSignalTier(score, input);
@@ -59,25 +60,56 @@ export function evaluateCandidateSignalQuality(input: {
     `动作${input.action}`,
     `强度${input.strengthScore}/100`,
     `买点${input.buyPointEvaluation.status}/${input.buyPointEvaluation.score}/20`,
-    `数据${input.dataCompleteness.level}`,
-    `归属${formatAttributionStatus(input.attribution.status)}/${input.attribution.confidence}`,
+    `数据${dataCompletenessLabel(input.dataCompleteness.level)}`,
+    `归属${formatAttributionStatus(input.attribution.status)}/${confidenceLabel(input.attribution.confidence)}`,
     `可买入性${input.tradability.status}/${input.tradability.score}`,
     input.activity ? `活跃度${input.activity.status}/${input.activity.score}` : "活跃度缺失",
     `定位${input.role}`,
+    `趋势${trendStateLabel(input.trendState)}`,
+    `资金${fundFlowStateLabel(input.fundFlowState)}`,
     input.marketState === "defensive" ? "大盘防守压制" : "",
     input.sectorStage ? `主线${input.sectorStage}` : "",
     pendingOpportunityBonus ? `机会预案加分${pendingOpportunityBonus}` : "",
-    hardRiskPenalty ? `风险扣分${hardRiskPenalty}` : ""
+    hardRiskPenalty ? `风险扣分${hardRiskPenalty}${rawHardRiskPenalty > hardRiskPenalty ? `（原始${rawHardRiskPenalty}，封顶）` : ""}` : "",
+    "信号分只用于候选排序，不突破规则动作和仓位上限"
   ].filter(Boolean);
   return { score, tier, label, reasons };
 }
 
+function dataCompletenessLabel(level: DataCompleteness["level"]) {
+  if (level === "complete") return "完整";
+  if (level === "partial") return "部分完整";
+  return "不足";
+}
+
+function confidenceLabel(value?: string) {
+  if (value === "high" || value === "高") return "高置信";
+  if (value === "medium" || value === "中") return "中置信";
+  if (value === "low" || value === "低") return "低置信";
+  return value ?? "未评级";
+}
+
+function trendStateLabel(value: StockCandidate["trendState"]) {
+  if (value === "above_ma20") return "站上MA20";
+  if (value === "reclaim_ma20") return "收复MA20";
+  if (value === "below_ma20") return "跌破MA20";
+  if (value === "downtrend") return "下降趋势";
+  return "未知";
+}
+
+function fundFlowStateLabel(value: StockCandidate["fundFlowState"]) {
+  if (value === "inflow") return "流入";
+  if (value === "outflow") return "流出";
+  if (value === "mixed") return "分歧";
+  return "未知";
+}
+
 function scoreSignalAction(action: StockCandidate["action"]) {
-  if (action === ZH.smallTrial) return 28;
-  if (action === ZH.waitPullback) return 20;
-  if (action === ZH.observe) return 13;
-  if (action === ZH.noChase) return 6;
-  if (action === ZH.avoid) return 2;
+  if (action === ZH.smallTrial) return 18;
+  if (action === ZH.waitPullback) return 14;
+  if (action === ZH.observe) return 10;
+  if (action === ZH.noChase) return 5;
+  if (action === ZH.avoid) return 1;
   return 0;
 }
 

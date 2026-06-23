@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Activity, AlertTriangle, BarChart3, ChevronDown, GitCompareArrows, LineChart, ListChecks } from "lucide-react";
+import { BasicStockNameHover } from "@/components/SelectionStockHover";
 import type { RuleReplaySnapshot } from "@/lib/db/ruleReplay";
 
 type ApiResponse<T> = { success: boolean; data: T | null; error: { code: string; message: string } | null };
@@ -188,7 +189,15 @@ function CandidateReplay({ snapshot }: { snapshot: RuleReplaySnapshot }) {
           {snapshot.candidates.repeatedBlockedStocks.length ? snapshot.candidates.repeatedBlockedStocks.map((stock) => (
             <div key={stock.code} className="rounded-lg border border-warn/25 bg-warn/10 p-3">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">{stock.name}</p>
+                <p className="text-sm font-medium">
+                  <BasicStockNameHover
+                    stock={{
+                      name: stock.name,
+                      code: stock.code,
+                      note: stock.latestReason
+                    }}
+                  />
+                </p>
                 <span className="rounded border border-warn/40 px-2 py-0.5 text-[11px] text-warn">{stock.count} 次</span>
               </div>
               <p className="mt-1 text-xs text-muted">{stock.code}</p>

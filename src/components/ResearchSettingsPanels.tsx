@@ -11,6 +11,7 @@ import {
 } from "@/components/ResearchSettingsControls";
 import type { DataSourceSettingsForm, SettingsForm } from "@/components/ResearchSettingsTypes";
 import type { AppSettings, DataSourceSettings } from "@/lib/types";
+import type { ProviderCapabilityAudit } from "@/lib/data/providerCapabilityAudit";
 
 type DataProvider = DataSourceSettings["providers"][number];
 
@@ -140,6 +141,7 @@ export function DataSourceSettingsPanel({
   setDataForm,
   dataStatus,
   dataTestStatus,
+  dataCapabilityAudit,
   visibleDataKeys,
   setVisibleDataKeys,
   saveDataSourceSettings,
@@ -149,6 +151,7 @@ export function DataSourceSettingsPanel({
   setDataForm: Dispatch<SetStateAction<DataSourceSettingsForm>>;
   dataStatus: string;
   dataTestStatus: Record<string, string>;
+  dataCapabilityAudit: Record<string, ProviderCapabilityAudit["providers"][number]>;
   visibleDataKeys: Record<string, boolean>;
   setVisibleDataKeys: Dispatch<SetStateAction<Record<string, boolean>>>;
   saveDataSourceSettings: () => void;
@@ -228,6 +231,9 @@ export function DataSourceSettingsPanel({
               </button>
               {dataTestStatus[provider.id] ? <p className="text-xs text-muted">{dataTestStatus[provider.id]}</p> : null}
             </div>
+            {dataCapabilityAudit[provider.id] ? (
+              <ProviderCapabilityCheckList audit={dataCapabilityAudit[provider.id]} />
+            ) : null}
           </div>
         ))}
         <button
@@ -243,4 +249,51 @@ export function DataSourceSettingsPanel({
       </div>
     </Panel>
   );
+}
+
+function ProviderCapabilityCheckList({ audit }: { audit: ProviderCapabilityAudit["providers"][number] }) {
+  return (
+    <div className="mt-3 rounded-lg border border-line/60 bg-panel/45 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-medium text-text">能力测试明细</p>
+        <span className={`rounded border px-2 py-0.5 text-[11px] ${audit.connected ? "border-up/35 bg-up/10 text-up" : "border-warn/35 bg-warn/10 text-warn"}`}>
+          {audit.connected ? "基础连接可用" : "基础连接异常"}
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] leading-5 text-muted">{audit.summary}</p>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {audit.checks.map((check) => (
+          <div key={check.key} className={`rounded border px-2 py-2 text-[11px] leading-4 ${capabilityStatusClass(check.status)}`}>
+            <div className="flex items-start justify-between gap-2">
+              <span className="font-medium">{check.label}</span>
+              <span className="shrink-0 rounded border border-current/20 bg-bg/25 px-1.5 py-0.5">{capabilityStatusLabel(check.status)}</span>
+            </div>
+            <p className="mt-1 opacity-85">{check.requiredFor}</p>
+            <p className="mt-1 opacity-75">{check.message}</p>
+            <p className="mt-1 font-mono opacity-60">
+              {check.apiName ?? check.key}
+              {typeof check.recordCount === "number" ? ` / ${check.recordCount} 条` : ""}
+              {typeof check.elapsedMs === "number" ? ` / ${check.elapsedMs}ms` : ""}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function capabilityStatusLabel(status: string) {
+  if (status === "available") return "可用";
+  if (status === "available_empty") return "可调用";
+  if (status === "permission_denied") return "权限不足";
+  if (status === "unconfigured") return "未配置";
+  if (status === "failed") return "失败";
+  return "运行时留痕";
+}
+
+function capabilityStatusClass(status: string) {
+  if (status === "available" || status === "available_empty") return "border-up/25 bg-up/10 text-up";
+  if (status === "permission_denied") return "border-amber-300/25 bg-amber-300/10 text-amber-100";
+  if (status === "failed" || status === "unconfigured") return "border-warn/30 bg-warn/10 text-warn";
+  return "border-line bg-bg/45 text-muted";
 }

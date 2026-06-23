@@ -19,6 +19,20 @@ export interface TushareDailyMetric {
   floatMarketValue?: number;
 }
 
+export interface TushareDailyKlineBar {
+  code: string;
+  tsCode: string;
+  tradeDate: string;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  amount?: number;
+  changePct?: number;
+  turnoverRate?: number;
+}
+
 export interface TushareFundFlowMetric {
   code: string;
   tsCode: string;
@@ -46,6 +60,20 @@ export interface TushareHolderNumber {
   endDate?: string;
   holderCount?: number;
   previousHolderCount?: number;
+}
+
+export interface TushareForecast {
+  code: string;
+  tsCode: string;
+  annDate?: string;
+  endDate?: string;
+  type?: string;
+  pChangeMin?: number;
+  pChangeMax?: number;
+  netProfitMin?: number;
+  netProfitMax?: number;
+  summary?: string;
+  changeReason?: string;
 }
 
 export interface TushareTradeCalDay {
@@ -94,6 +122,42 @@ export class TushareAdapter {
       data: settled.filter((item): item is TushareDailyMetric => Boolean(item)),
       warnings: Array.from(new Set(warnings))
     };
+  }
+
+  async getDailyKlines(code: string, endDate: string, limit = 90): Promise<{ data: TushareDailyKlineBar[]; warnings: string[] }> {
+    if (!this.isEnabled()) return { data: [], warnings: ["Tushare 未启用，跳过日 K 线补源。"] };
+    const normalized = normalizeMarketCode(code);
+    if (!normalized) return { data: [], warnings: [`Tushare 日 K 线补源失败：股票代码无效 ${code}`] };
+
+    const safeLimit = Math.min(Math.max(Math.trunc(limit), 20), 240);
+    const startDate = offsetCompactDate(endDate, -Math.ceil(safeLimit * 2.2));
+    try {
+      const tsCode = toTushareCode(normalized);
+      const [dailyRows, basicRows] = await Promise.all([
+        this.query(
+          "daily",
+          { ts_code: tsCode, start_date: startDate, end_date: endDate },
+          "ts_code,trade_date,open,high,low,close,vol,amount,pct_chg"
+        ),
+        this.query(
+          "daily_basic",
+          { ts_code: tsCode, start_date: startDate, end_date: endDate },
+          "ts_code,trade_date,turnover_rate"
+        ).catch(() => [])
+      ]);
+      const basicByDate = new Map(basicRows.map((row) => [String(row.trade_date ?? ""), row]));
+      const data = dailyRows
+        .map((row) => mergeDailyKlineBar(normalized, row, basicByDate.get(String(row.trade_date ?? ""))))
+        .filter((item): item is TushareDailyKlineBar => Boolean(item?.tradeDate && item.close !== undefined))
+        .sort((left, right) => left.tradeDate.localeCompare(right.tradeDate))
+        .slice(-safeLimit);
+      return { data, warnings: data.length ? [] : [`Tushare 日 K 线补源为空：${normalized}`] };
+    } catch (error) {
+      return {
+        data: [],
+        warnings: [`Tushare 日 K 线补源失败 ${normalized}：${error instanceof Error ? error.message : String(error)}`]
+      };
+    }
   }
 
   async getFundFlows(codes: string[], endDate: string, lookbackDays = 90): Promise<{ data: TushareFundFlowMetric[]; warnings: string[] }> {
@@ -147,6 +211,28 @@ export class TushareAdapter {
       }
     }));
     return { data: settled.filter((item): item is TushareHolderNumber => Boolean(item)), warnings: Array.from(new Set(warnings)) };
+  }
+
+  async getForecasts(codes: string[], endDate: string, lookbackDays = 540): Promise<{ data: TushareForecast[]; warnings: string[] }> {
+    if (!this.isEnabled()) return { data: [], warnings: [] };
+    const uniqueCodes = Array.from(new Set(codes.map(normalizeMarketCode).filter(Boolean)));
+    const startDate = offsetCompactDate(endDate, -lookbackDays);
+    const warnings: string[] = [];
+    const settled = await Promise.all(uniqueCodes.map(async (code) => {
+      try {
+        const tsCode = toTushareCode(code);
+        const rows = await this.query(
+          "forecast",
+          { ts_code: tsCode, start_date: startDate, end_date: endDate },
+          "ts_code,ann_date,end_date,type,p_change_min,p_change_max,net_profit_min,net_profit_max,summary,change_reason"
+        );
+        return mergeForecast(code, rows);
+      } catch (error) {
+        warnings.push(`Tushare 业绩预告补充失败 ${code}：${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      }
+    }));
+    return { data: settled.filter((item): item is TushareForecast => Boolean(item)), warnings: Array.from(new Set(warnings)) };
   }
 
   async getTradeCalendar(startDate: string, endDate: string): Promise<{ data: TushareTradeCalDay[]; warnings: string[] }> {
@@ -218,6 +304,25 @@ function mergeDailyMetric(code: string, daily?: Record<string, unknown>, basic?:
   };
 }
 
+function mergeDailyKlineBar(code: string, daily?: Record<string, unknown>, basic?: Record<string, unknown>): TushareDailyKlineBar | null {
+  if (!daily) return null;
+  const tradeDate = stringValue(daily.trade_date);
+  if (!tradeDate) return null;
+  return {
+    code,
+    tsCode: String(daily.ts_code ?? toTushareCode(code)),
+    tradeDate,
+    open: numberValue(daily.open),
+    high: numberValue(daily.high),
+    low: numberValue(daily.low),
+    close: numberValue(daily.close),
+    volume: multiply(numberValue(daily.vol), 100),
+    amount: multiply(numberValue(daily.amount), 1000),
+    changePct: numberValue(daily.pct_chg),
+    turnoverRate: numberValue(basic?.turnover_rate)
+  };
+}
+
 function mergeFundFlowMetric(code: string, rows: Record<string, unknown>[]): TushareFundFlowMetric | null {
   const sorted = [...rows].sort((left, right) => String(right.trade_date ?? "").localeCompare(String(left.trade_date ?? "")));
   const latest = sorted[0];
@@ -257,6 +362,25 @@ function mergeHolderNumber(code: string, rows: Record<string, unknown>[]): Tusha
     endDate: stringValue(latest.end_date),
     holderCount: numberValue(latest.holder_num),
     previousHolderCount: numberValue(sorted[1]?.holder_num)
+  };
+}
+
+function mergeForecast(code: string, rows: Record<string, unknown>[]): TushareForecast | null {
+  const sorted = [...rows].sort((left, right) => String(right.ann_date ?? "").localeCompare(String(left.ann_date ?? "")));
+  const latest = sorted[0];
+  if (!latest) return null;
+  return {
+    code,
+    tsCode: String(latest.ts_code ?? toTushareCode(code)),
+    annDate: stringValue(latest.ann_date),
+    endDate: stringValue(latest.end_date),
+    type: stringValue(latest.type),
+    pChangeMin: numberValue(latest.p_change_min),
+    pChangeMax: numberValue(latest.p_change_max),
+    netProfitMin: multiply(numberValue(latest.net_profit_min), 10_000),
+    netProfitMax: multiply(numberValue(latest.net_profit_max), 10_000),
+    summary: stringValue(latest.summary),
+    changeReason: stringValue(latest.change_reason)
   };
 }
 

@@ -4,6 +4,45 @@ export type SerenityEvidenceStrength = "strong" | "medium" | "weak" | "needs_che
 
 export type SerenityPriority = "top" | "high" | "watch" | "low";
 
+export type SerenityResearchBoundaryLevel = "evidence_backed" | "candidate_watch" | "needs_hard_evidence" | "research_only";
+
+export type SerenityEvidenceCoverage = {
+  sourceCount: number;
+  strongCount: number;
+  mediumCount: number;
+  weakCount: number;
+  needsCheckingCount: number;
+  hardEvidenceCount: number;
+  verifiedHardEvidenceCount: number;
+  freshEvidenceCount: number;
+  agingEvidenceCount: number;
+  staleEvidenceCount: number;
+  undatedEvidenceCount: number;
+  freshnessLevel: "fresh" | "aging" | "stale" | "unknown";
+  confidencePct: number;
+  sourceLabels: string[];
+  latestFetchedAt?: string;
+};
+
+export type SerenityEvidenceNeedKey =
+  | "business"
+  | "filing"
+  | "customer"
+  | "capacity"
+  | "constraint"
+  | "falsification"
+  | "market"
+  | "evidence_strength";
+
+export type SerenityEvidenceNeed = {
+  key: SerenityEvidenceNeedKey;
+  label: string;
+  priority: "high" | "medium" | "low";
+  reason: string;
+  sourcePaths: string[];
+  canAutomate: boolean;
+};
+
 export type SerenityFactorKey =
   | "demandInflection"
   | "architectureCoupling"
@@ -42,6 +81,7 @@ export type SerenityThemeSuggestion = {
   description: string;
   chainKeywords: string[];
   source: "builtin" | "mainline" | "history";
+  sourceLabel?: string;
   score: number;
 };
 
@@ -50,15 +90,36 @@ export type SerenityPreviewCandidate = {
   name: string;
   source: "manual" | "latest_mainline" | "eastmoney_sector";
   sourceLabel: string;
+  sourceUrl?: string;
+  fetchedAt?: string;
   sectorName?: string;
   chainPosition: string;
   matchReason: string;
   evidenceStrength: SerenityEvidenceStrength;
+  evidence?: SerenityEvidence[];
   missingProof: string[];
   changePct?: number;
   amount?: number;
   turnoverRate?: number;
   mainNetInflow?: number;
+  latest?: number;
+  industry?: string;
+  business?: string;
+  evidenceSummary?: {
+    sourceCount: number;
+    strongCount: number;
+    mediumCount: number;
+    weakCount: number;
+    needsCheckingCount: number;
+  };
+  evidenceCoverage?: SerenityEvidenceCoverage;
+  evidenceNeeds?: SerenityEvidenceNeed[];
+  researchBoundary?: {
+    level: SerenityResearchBoundaryLevel;
+    label: string;
+    text: string;
+  };
+  nextResearchChecks?: string[];
   score: number;
 };
 
@@ -78,6 +139,7 @@ export type SerenityEvidence = {
   sourceType: string;
   sourceLabel: string;
   sourceUrl?: string;
+  fetchedAt?: string;
   strength: SerenityEvidenceStrength;
 };
 
@@ -90,6 +152,7 @@ export type SerenityCandidateInput = {
   factors?: Partial<Record<SerenityFactorKey, number>>;
   penalties?: Partial<Record<SerenityPenaltyKey, number>>;
   evidence?: SerenityEvidence[];
+  missingProof?: string[];
   weakenConditions?: string[];
 };
 
@@ -107,6 +170,14 @@ export type SerenityCandidateScore = {
   penaltyDetails: Record<SerenityPenaltyKey, { rating: number; points: number }>;
   evidenceStrength: SerenityEvidenceStrength;
   evidence: SerenityEvidence[];
+  evidenceCoverage?: SerenityEvidenceCoverage;
+  evidenceNeeds?: SerenityEvidenceNeed[];
+  researchBoundary?: {
+    level: SerenityResearchBoundaryLevel;
+    label: string;
+    text: string;
+  };
+  nextResearchChecks?: string[];
   missingProof: string[];
   weakenConditions: string[];
   verdict: string;

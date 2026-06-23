@@ -25,6 +25,22 @@ export type DataSourceSettingsInput = Partial<{
 }>;
 
 type StoredModelSettings = Partial<Omit<RuntimeSettings, "apiKeyMasked" | "westockPackageVersion">>;
+type SettingsCacheEntry<T> = { expiresAt: number; value: T };
+
+const SETTINGS_CACHE_TTL_MS = 5_000;
+const globalSettingsCache = globalThis as typeof globalThis & {
+  __chainAlphaSettingsCache?: {
+    model?: SettingsCacheEntry<StoredModelSettings>;
+    dataSource?: SettingsCacheEntry<Partial<DataSourceSettings>>;
+    scheduler?: SettingsCacheEntry<SchedulerSettings>;
+  };
+};
+
+function settingsCache() {
+  const cache = globalSettingsCache.__chainAlphaSettingsCache ?? {};
+  globalSettingsCache.__chainAlphaSettingsCache = cache;
+  return cache;
+}
 
 export function getRuntimeSettings(): RuntimeSettings {
   const defaults = getDefaultSettings();
@@ -83,6 +99,7 @@ export function saveModelSettings(input: SettingsInput): AppSettings {
     modelAuditEnabled: next.modelAuditEnabled
   };
   writeStoredModelSettings(stored);
+  invalidateSettingsCache("model");
   const publicSettings = {
     ...next,
     apiKeyMasked: maskSecret(next.apiKey)
@@ -142,21 +159,31 @@ export function saveDataSourceSettings(input: DataSourceSettingsInput): DataSour
     [DATA_SOURCE_SETTINGS_KEY, JSON.stringify(stored), stored.updatedAt],
     { label: "settings.data_source.upsert" }
   );
+  invalidateSettingsCache("dataSource");
   return getDataSourceSettings();
 }
 
 export function getSchedulerSettings(): SchedulerSettings {
   const defaults = getDefaultSchedulerSettings();
+  const cached = settingsCache().scheduler;
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
   const row = dbGet<{ value: string }>(
     "select value from settings where key = ?",
     [SCHEDULER_SETTINGS_KEY],
     { label: "settings.scheduler.get" }
   );
-  if (!row) return defaults;
+  if (!row) {
+    settingsCache().scheduler = { value: defaults, expiresAt: now + SETTINGS_CACHE_TTL_MS };
+    return defaults;
+  }
   try {
     const parsed = JSON.parse(row.value) as Partial<SchedulerSettings>;
-    return sanitizeSchedulerSettings({ ...defaults, ...parsed });
+    const value = sanitizeSchedulerSettings({ ...defaults, ...parsed });
+    settingsCache().scheduler = { value, expiresAt: now + SETTINGS_CACHE_TTL_MS };
+    return value;
   } catch {
+    settingsCache().scheduler = { value: defaults, expiresAt: now + SETTINGS_CACHE_TTL_MS };
     return defaults;
   }
 }
@@ -170,6 +197,7 @@ export function saveSchedulerSettings(input: Partial<SchedulerSettings>): Schedu
     [SCHEDULER_SETTINGS_KEY, JSON.stringify(next), new Date().toISOString()],
     { label: "settings.scheduler.upsert" }
   );
+  invalidateSettingsCache("scheduler");
   return next;
 }
 
@@ -181,36 +209,56 @@ export function getDefaultSchedulerSettings(): SchedulerSettings {
     keypointTimes: ["08:50", "09:26", "11:35", "14:50", "15:10"],
     deepResearchTimes: ["20:30"],
     llmOnEvent: true,
-    pushNotification: false
+    pushNotification: false,
+    auctionWatchlistPushEnabled: false,
+    riskWarningPushEnabled: true
   };
 }
 
 function readStoredModelSettings(): StoredModelSettings {
+  const cached = settingsCache().model;
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
   const row = dbGet<{ value: string }>(
     "select value from settings where key = ?",
     [MODEL_PROVIDER_KEY],
     { label: "settings.model.get" }
   );
-  if (!row) return {};
+  if (!row) {
+    settingsCache().model = { value: {}, expiresAt: now + SETTINGS_CACHE_TTL_MS };
+    return {};
+  }
   try {
     const parsed = JSON.parse(row.value);
-    return parsed && typeof parsed === "object" ? parsed : {};
+    const value = parsed && typeof parsed === "object" ? parsed : {};
+    settingsCache().model = { value, expiresAt: now + SETTINGS_CACHE_TTL_MS };
+    return value;
   } catch {
+    settingsCache().model = { value: {}, expiresAt: now + SETTINGS_CACHE_TTL_MS };
     return {};
   }
 }
 
 function readStoredDataSourceSettings(): Partial<DataSourceSettings> {
+  const cached = settingsCache().dataSource;
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
   const row = dbGet<{ value: string }>(
     "select value from settings where key = ?",
     [DATA_SOURCE_SETTINGS_KEY],
     { label: "settings.data_source.get" }
   );
-  if (!row) return {};
+  if (!row) {
+    settingsCache().dataSource = { value: {}, expiresAt: now + SETTINGS_CACHE_TTL_MS };
+    return {};
+  }
   try {
     const parsed = JSON.parse(row.value);
-    return parsed && typeof parsed === "object" ? parsed : {};
+    const value = parsed && typeof parsed === "object" ? parsed : {};
+    settingsCache().dataSource = { value, expiresAt: now + SETTINGS_CACHE_TTL_MS };
+    return value;
   } catch {
+    settingsCache().dataSource = { value: {}, expiresAt: now + SETTINGS_CACHE_TTL_MS };
     return {};
   }
 }
@@ -223,6 +271,15 @@ function writeStoredModelSettings(settings: StoredModelSettings) {
     [MODEL_PROVIDER_KEY, JSON.stringify(settings), new Date().toISOString()],
     { label: "settings.model.upsert" }
   );
+}
+
+function invalidateSettingsCache(key?: keyof NonNullable<typeof globalSettingsCache.__chainAlphaSettingsCache>) {
+  const cache = settingsCache();
+  if (!key) {
+    globalSettingsCache.__chainAlphaSettingsCache = {};
+    return;
+  }
+  delete cache[key];
 }
 
 function sanitizeString(value: unknown) {
@@ -248,7 +305,13 @@ function sanitizeSchedulerSettings(input: Partial<SchedulerSettings>): Scheduler
     keypointTimes: sanitizeTimes(input.keypointTimes, defaults.keypointTimes),
     deepResearchTimes: sanitizeTimes(input.deepResearchTimes, defaults.deepResearchTimes),
     llmOnEvent: typeof input.llmOnEvent === "boolean" ? input.llmOnEvent : defaults.llmOnEvent,
-    pushNotification: typeof input.pushNotification === "boolean" ? input.pushNotification : defaults.pushNotification
+    pushNotification: typeof input.pushNotification === "boolean" ? input.pushNotification : defaults.pushNotification,
+    auctionWatchlistPushEnabled: typeof input.auctionWatchlistPushEnabled === "boolean"
+      ? input.auctionWatchlistPushEnabled
+      : defaults.auctionWatchlistPushEnabled,
+    riskWarningPushEnabled: typeof input.riskWarningPushEnabled === "boolean"
+      ? input.riskWarningPushEnabled
+      : defaults.riskWarningPushEnabled
   };
 }
 

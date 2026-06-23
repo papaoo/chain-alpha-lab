@@ -2,7 +2,7 @@ import type { CompanyKnowledgeCard, Fact, SectorConstituentSnapshot, SectorRuleR
 import type { ParsedCommandResult } from "@/lib/westock/parser";
 import { ZH } from "@/lib/strategy/support";
 import { firstTableRows, maxDefined, numberValue, pushFact } from "@/lib/strategy/utils";
-import { normalizeStockCode } from "@/lib/strategy/candidateUtils";
+import { isAshareStockCode, normalizeStockCode } from "@/lib/strategy/candidateUtils";
 import { normalizeSectorName, sameSectorName } from "@/lib/sector/normalization";
 
 export function buildCandidateSourceRows(
@@ -19,14 +19,15 @@ export function buildCandidateSourceRows(
   for (const constituent of sectorConstituents) {
     if (!currentSectorNames.has(normalizeSectorName(constituent.name))) continue;
     for (const stock of constituent.stocks) {
-      currentSectorCodes.add(normalizeStockCode(stock.marketCode || stock.code));
+      const code = normalizeStockCode(stock.marketCode || stock.code);
+      if (isAshareStockCode(code)) currentSectorCodes.add(code);
     }
   }
 
   const hotRows = firstTableRows(hotStocks).slice(0, 12);
   for (const row of hotRows) {
     const code = normalizeStockCode(String(row.code ?? ""));
-    if (!code || rows.has(code) || !currentSectorCodes.has(code)) continue;
+    if (!code || !isAshareStockCode(code) || rows.has(code) || !currentSectorCodes.has(code)) continue;
     rows.set(code, { ...row, code, source: "hot_stock_mainline_member" });
   }
 
@@ -47,7 +48,7 @@ export function buildCandidateSourceRows(
       .slice(0, 8);
     for (const [sectorRank, stock] of leaders.entries()) {
       const code = normalizeStockCode(stock.marketCode || stock.code);
-      if (!code || rows.has(code)) continue;
+      if (!code || !isAshareStockCode(code) || rows.has(code)) continue;
       rows.set(code, {
         code,
         name: stock.name,
@@ -83,7 +84,7 @@ export function buildCandidateSourceRows(
 
   for (const row of hotRows) {
     const code = normalizeStockCode(String(row.code ?? ""));
-    if (!code || rows.has(code)) continue;
+    if (!code || !isAshareStockCode(code) || rows.has(code)) continue;
     rows.set(code, { ...row, code, source: "hot_stock" });
   }
 
@@ -101,7 +102,7 @@ export function buildSectorMembershipIndex(
     if (!sectorNames.has(normalizeSectorName(snapshot.name))) continue;
     for (const stock of snapshot.stocks) {
       const normalized = normalizeStockCode(stock.marketCode || stock.code);
-      if (!normalized || index.has(normalized)) continue;
+      if (!normalized || !isAshareStockCode(normalized) || index.has(normalized)) continue;
       index.set(normalized, { name: snapshot.name, boardCode: snapshot.boardCode, boardType: snapshot.boardType });
       pushFact(
         facts,

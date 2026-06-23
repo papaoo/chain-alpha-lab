@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type * as React from "react";
 import { ChevronDown } from "lucide-react";
-import type { StockCandidate } from "@/lib/types";
+import type { DataCompleteness, StockCandidate } from "@/lib/types";
 
 export function CollapsibleSection({
   title,
@@ -73,7 +73,10 @@ export function SignalBadge({ candidate }: { candidate: StockCandidate }) {
   const tier = candidate.signalTier ?? "-";
   const score = candidate.signalScore ?? candidate.strengthScore;
   const label = candidate.signalLabel ?? "待分层";
-  const title = candidate.signalReasons?.length ? candidate.signalReasons.join("；") : "旧报告暂无信号分层，重新运行分析后会生成。";
+  const title = [
+    candidate.signalReasons?.length ? candidate.signalReasons.join("；") : "旧报告暂无信号分层，重新运行分析后会生成。",
+    SIGNAL_SCORE_BOUNDARY
+  ].join("；");
   const cls = tier === "S"
     ? "border-up/50 bg-up/15 text-up"
     : tier === "A"
@@ -91,6 +94,8 @@ export function SignalBadge({ candidate }: { candidate: StockCandidate }) {
   );
 }
 
+export const SIGNAL_SCORE_BOUNDARY = "信号分只用于候选排序和解释，不突破规则动作、买点状态、数据完整性和仓位上限。";
+
 export function StrengthBadge({ score }: { score?: number }) {
   if (score === undefined) return <span className="rounded border border-line px-2 py-1 text-xs text-muted">待刷新</span>;
   const cls = score >= 80
@@ -104,8 +109,8 @@ export function StrengthBadge({ score }: { score?: number }) {
 }
 
 export function formatMemoryBadge(seenCount?: number, lastAction?: string) {
-  if (!seenCount) return "新";
-  return `跟踪 ${seenCount} 次 / 上次${formatAction(lastAction ?? "")}`;
+  if (!seenCount) return "首次入池";
+  return `历史 ${seenCount} 次 / 上次：${formatAction(lastAction ?? "")}`;
 }
 
 export function attributionPillClass(value?: string) {
@@ -179,6 +184,41 @@ export function formatCompleteness(level: string) {
     insufficient: "不足"
   };
   return labels[level] ?? level;
+}
+
+export function formatCompletenessDetail(completeness: DataCompleteness) {
+  const core = completeness.coreMarketLevel ?? completeness.level;
+  const company = completeness.companyKnowledgeLevel;
+  const coreLabel = formatCompleteness(core);
+  const companyLabel = company ? knowledgeLevelLabel(company) : completeness.hasCompanyKnowledge ? "可用" : "缺失";
+  if (core === "complete" && company !== "sufficient") return `交易已齐 / 公司${companyLabel}`;
+  if (core === "complete") return "交易已齐 / 公司充足";
+  return `交易${coreLabel} / 公司${companyLabel}`;
+}
+
+export function formatCompletenessTitle(completeness: DataCompleteness) {
+  const core = [
+    `K线：${completeness.hasKlineData ? "有" : "缺"}`,
+    `技术：${completeness.hasTechnicalData ? "有" : "缺"}`,
+    `资金：${completeness.hasFundFlowData ? "有" : "缺"}`,
+    `主线归属：${completeness.hasSectorData ? "有" : "缺"}`,
+    `公司概况：${completeness.hasProfileData ? "有" : "缺"}`
+  ].join("；");
+  const hardMissing = completeness.missingFields.filter((field) => !field.includes("公司认知补充字段"));
+  const softMissing = completeness.missingFields.filter((field) => field.includes("公司认知补充字段"));
+  const missing = hardMissing.length
+    ? `核心缺口：${hardMissing.join("、")}`
+    : softMissing.length
+      ? `软补充项：${softMissing.join("、")}。这不阻断交易数据判断，但会降低长期/产业链解释力度`
+      : "本期核心字段完整";
+  const blockers = completeness.blockingReasons.length ? `硬阻断：${completeness.blockingReasons.join("；")}` : "无数据硬阻断";
+  return `${core}。${missing}。${blockers}`;
+}
+
+function knowledgeLevelLabel(level: NonNullable<DataCompleteness["companyKnowledgeLevel"]>) {
+  if (level === "sufficient") return "充足";
+  if (level === "partial") return "待补";
+  return "缺失";
 }
 
 export function localizeText(text?: string | null) {

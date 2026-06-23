@@ -292,6 +292,20 @@ function commonParameters({
       type: "boolean" as const,
       defaultValue: true,
       description: "核心行情、K 线、资金或公司信息缺失时默认不进入最终精选。"
+    },
+    {
+      key: "forceAgentOnStale",
+      label: "强制复核历史快照",
+      type: "boolean" as const,
+      defaultValue: false,
+      description: "来源报告过期时默认跳过 Agent 以节省 token；仅在做历史复盘或链路压测时开启。"
+    },
+    {
+      key: "forceAgentOnReferenceOnly",
+      label: "复核仅研究快照",
+      type: "boolean" as const,
+      defaultValue: false,
+      description: "盘前、夜间或休市快照默认不调用 Agent；仅在做研究复盘、提示词压测或人工确认需要模型总结时开启。"
     }
   ];
 }

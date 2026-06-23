@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildFactPackage } from "../../../src/lib/strategy/rules";
+import { evaluateCandidateSignalQuality } from "../../../src/lib/strategy/candidateSignalQuality";
+import { buildCompanyKnowledge } from "../../../src/lib/strategy/companyKnowledge";
+import { decideCandidateAction } from "../../../src/lib/strategy/stockTradabilityRules";
+import { buildCompleteness } from "../../../src/lib/strategy/stockDataRules";
+import { ZH } from "../../../src/lib/strategy/support";
 import type { LimitPoolSnapshot, MarketBreadthSnapshot, MarketTimelinePoint, SectorConstituentSnapshot } from "../../../src/lib/types";
 import type { ParsedCell, ParsedCommandResult } from "../../../src/lib/westock/parser";
 
@@ -314,6 +319,55 @@ describe("buildFactPackage rule enhancements", () => {
     expect(factPackage.sectors[0]?.stage).toBe("分歧");
   });
 
+  it("treats a strong structured mainline with short-term funding fade as divergence instead of immediate fading", () => {
+    const sectorConstituents: SectorConstituentSnapshot[] = [{
+      source: "eastmoney",
+      fetchedAt: "2026-06-03T10:30:00+08:00",
+      name: "通信设备",
+      boardCode: "BK0448",
+      boardType: "industry",
+      stocks: Array.from({ length: 60 }, (_, index) => ({
+        code: String(600000 + index),
+        marketCode: `sh${600000 + index}`,
+        name: `测试${index}`,
+        changePct: index < 4 ? 10 : index < 38 ? 1.2 : -0.8,
+        amount: index < 4 ? 100000000 - index * 1000000 : 1000000,
+        floatMarketValue: index < 4 ? 10000000000 - index * 100000000 : 100000000,
+        mainNetInflow: index < 4 ? 10000000 : -100000
+      }))
+    }];
+    const limitPools: LimitPoolSnapshot[] = [{
+      source: "eastmoney",
+      fetchedAt: "2026-06-03T10:30:00+08:00",
+      pool: "zt",
+      date: "20260603",
+      stocks: Array.from({ length: 4 }, (_, index) => ({
+        code: String(600000 + index),
+        marketCode: `sh${600000 + index}`,
+        name: `测试${index}`,
+        industry: "通信设备"
+      }))
+    }];
+    const factPackage = buildPackage({
+      sectorConstituents,
+      limitPools,
+      boardOverview: table("board", [], [{
+        name: "通信设备",
+        changePct: -0.8,
+        changePct5d: 8,
+        changePct20d: 18,
+        mainNetInflow: -500,
+        mainNetInflow5d: -1200,
+        upDownRatio: "38:22",
+        leadStock: "测试0(10.00)"
+      }])
+    });
+
+    expect(factPackage.sectors[0]?.rawStage).toBe("分歧");
+    expect(factPackage.sectors[0]?.stage).toBe("分歧");
+    expect(factPackage.sectors[0]?.diagnostics.find((item) => item.label === "涨停核心")?.score).toBeGreaterThanOrEqual(6);
+  });
+
   it("merges highly confident sector aliases before mainline scoring", () => {
     const factPackage = buildPackage({
       boardOverview: table("board", [], [{
@@ -385,6 +439,84 @@ describe("buildFactPackage rule enhancements", () => {
     expect(factPackage.sectors[0]?.stageTransitionReason).toContain("加速必须建立在已确认主线之上");
     expect(factPackage.sectors[0]?.coreContinuity?.retained).toContain("测试0");
     expect(factPackage.sectors[0]?.coreContinuity?.state).not.toBe("换龙头待确认");
+  });
+
+  it("buffers confirmed or accelerating mainlines from one-step fading when core structure is still alive", () => {
+    const marketTimeline: MarketTimelinePoint[] = [{
+      reportId: "previous",
+      createdAt: "2026-06-02T15:00:00+08:00",
+      marketState: "cautious",
+      marketRegime: "震荡",
+      tradeMode: "试错",
+      sentimentCycle: "修复",
+      score: 65,
+      topSectors: [{
+        name: "通信设备",
+        stage: "确认",
+        score: 68,
+        coreStocks: [{
+          code: "600000",
+          name: "测试0",
+          role: "龙头",
+          score: 62,
+          limitStatus: "涨停"
+        }, {
+          code: "600001",
+          name: "测试1",
+          role: "中军",
+          score: 52,
+          limitStatus: "未涨停"
+        }]
+      }]
+    }];
+    const sectorConstituents: SectorConstituentSnapshot[] = [{
+      source: "eastmoney",
+      fetchedAt: "2026-06-03T10:30:00+08:00",
+      name: "通信设备",
+      boardCode: "BK0448",
+      boardType: "industry",
+      stocks: Array.from({ length: 80 }, (_, index) => ({
+        code: String(600000 + index),
+        marketCode: `sh${600000 + index}`,
+        name: `测试${index}`,
+        changePct: index < 3 ? 10 : index < 30 ? 0.8 : -1.5,
+        amount: index < 3 ? 100000000 - index * 1000000 : 1000000,
+        floatMarketValue: index < 3 ? 10000000000 - index * 100000000 : 100000000,
+        mainNetInflow: index < 3 ? 10000000 : -100000
+      }))
+    }];
+    const limitPools: LimitPoolSnapshot[] = [{
+      source: "eastmoney",
+      fetchedAt: "2026-06-03T10:30:00+08:00",
+      pool: "zt",
+      date: "20260603",
+      stocks: Array.from({ length: 3 }, (_, index) => ({
+        code: String(600000 + index),
+        marketCode: `sh${600000 + index}`,
+        name: `测试${index}`,
+        industry: "通信设备"
+      }))
+    }];
+    const factPackage = buildPackage({
+      marketTimeline,
+      sectorConstituents,
+      limitPools,
+      boardOverview: table("board", [], [{
+        name: "通信设备",
+        changePct: -1.2,
+        changePct5d: -4.2,
+        changePct20d: -1,
+        mainNetInflow: -1200,
+        mainNetInflow5d: -2500,
+        upDownRatio: "30:50",
+        leadStock: "测试0(10.00)"
+      }])
+    });
+
+    expect(factPackage.sectors[0]?.rawStage).toBe("退潮");
+    expect(factPackage.sectors[0]?.stage).toBe("分歧");
+    expect(factPackage.sectors[0]?.stageTransition).toBe("降级修正");
+    expect(factPackage.sectors[0]?.stageTransitionReason).toContain("分歧缓冲");
   });
 
   it("allows a startup mainline to confirm through a limit-core path before broad diffusion fully matures", () => {
@@ -665,15 +797,169 @@ describe("buildFactPackage rule enhancements", () => {
     expect(factPackage.facts.find((fact) => fact.factId === "rule.stock.sh600002.signal_quality")).toBeTruthy();
   });
 
+  it("keeps signal quality from being dominated by final action or repeated hard-risk penalties", () => {
+    const base = {
+      action: ZH.observe,
+      strengthScore: 88,
+      buyPointEvaluation: {
+        type: ZH.maPullback,
+        score: 16,
+        status: "待激活",
+        satisfied: ["趋势保持"],
+        blockers: [],
+        triggerCondition: "放量站稳分时均价线",
+        invalidCondition: "跌破MA20",
+        sessionNote: "盘中观察"
+      },
+      dataCompleteness: {
+        level: "complete",
+        hasHotData: true,
+        hasKlineData: true,
+        hasTechnicalData: true,
+        hasFundFlowData: true,
+        hasSectorData: true,
+        hasProfileData: true,
+        hasCompanyKnowledge: true,
+        missingFields: [],
+        blockingReasons: []
+      },
+      attribution: {
+        status: "direct_constituent",
+        confidence: "高",
+        reason: "成分股直接匹配",
+        evidence: ["板块成分"],
+        businessKeywords: ["通信设备"],
+        sectorKeywords: ["通信"],
+        blockers: [],
+        shouldExclude: false
+      },
+      role: ZH.core,
+      trendState: "above_ma20",
+      fundFlowState: "inflow",
+      marketState: "cautious",
+      sectorStage: ZH.startup,
+      tradability: {
+        status: "可买入观察",
+        score: 80,
+        blockers: [],
+        waitFor: "等待规则确认",
+        nextSessionPlan: { mode: "无", preconditions: [], doNotChase: [], invalidConditions: [] }
+      },
+      riskFlags: []
+    } satisfies Parameters<typeof evaluateCandidateSignalQuality>[0];
+
+    const observed = evaluateCandidateSignalQuality({ ...base, action: ZH.observe });
+    expect(observed.score).toBeGreaterThanOrEqual(70);
+    expect(observed.reasons.join("；")).toContain("动作观察");
+    expect(observed.reasons.join("；")).toContain("数据完整");
+    expect(observed.reasons.join("；")).toContain("归属");
+    expect(observed.reasons.join("；")).toContain("高置信");
+    expect(observed.reasons.join("；")).toContain("趋势站上MA20");
+    expect(observed.reasons.join("；")).toContain("资金流入");
+    expect(observed.reasons.join("；")).toContain("信号分只用于候选排序");
+    expect(observed.reasons.join("；")).not.toMatch(/\bcomplete\b|\bhigh\b|\babove_ma20\b|\binflow\b/);
+
+    const repeatedRisk = evaluateCandidateSignalQuality({
+      ...base,
+      action: ZH.noChase,
+      trendState: "below_ma20",
+      fundFlowState: "outflow",
+      attribution: { ...base.attribution, shouldExclude: true, status: "mismatch", reason: "主题偏离" },
+      tradability: { ...base.tradability, status: "涨停不可达" },
+      riskFlags: ["风险1", "风险2", "风险3", "风险4", "风险5", "风险6"]
+    });
+    expect(repeatedRisk.reasons.join("；")).toContain("封顶");
+  });
+
   it("gives position only to explicit small-trial actions", () => {
     const pullback = buildPackage();
     expect(pullback.candidates[0]?.action).toBe("小仓试错");
     expect(pullback.candidates[0]?.positionLimitPct).toBe(10);
 
-    const stock = stockInput({ close: 103, ma5: 106, ma10: 102, ma20: 95, ma60: 90, mainNetFlow: 100, mainNetFlow5D: -50 });
+    const stock = stockInput({ close: 103, ma5: 106, ma10: 102, ma20: 95, ma60: 90, mainNetFlow: -100, mainNetFlow5D: -200 });
     const waiting = buildPackage(stock);
     expect(waiting.candidates[0]?.action).not.toBe("小仓试错");
     expect(waiting.candidates[0]?.positionLimitPct).toBe(0);
+  });
+
+  it("allows high-quality breakout pullback only for core stocks under tradable or confirmed conditions", () => {
+    const base = {
+      dataCompleteness: {
+        level: "complete",
+        hasHotData: true,
+        hasKlineData: true,
+        hasTechnicalData: true,
+        hasFundFlowData: true,
+        hasSectorData: true,
+        hasProfileData: true,
+        hasCompanyKnowledge: true,
+        missingFields: [],
+        blockingReasons: []
+      },
+      trendState: "above_ma20",
+      fundFlowState: "inflow",
+      buyPointType: ZH.breakoutPullback,
+      buyPointStatus: "有效",
+      marketState: "tradable",
+      sectorStage: ZH.confirmed,
+      sectorAllowedBuyTypes: [ZH.maPullback, ZH.breakoutPullback, ZH.divergenceRepair],
+      role: ZH.core,
+      farAboveMa5: false,
+      farAboveMa20: false,
+      tradability: {
+        status: "可买入观察",
+        score: 80,
+        blockers: [],
+        waitFor: "可进入规则仓位评估",
+        nextSessionPlan: { mode: "无", preconditions: [], doNotChase: [], invalidConditions: [] }
+      },
+      strengthScore: 78,
+      sectorEvidenceOk: true
+    } satisfies Parameters<typeof decideCandidateAction>[0];
+
+    expect(decideCandidateAction(base)).toBe("小仓试错");
+    expect(decideCandidateAction({ ...base, role: ZH.catchUp })).toBe("等待回踩");
+    expect(decideCandidateAction({ ...base, strengthScore: 72 })).toBe("等待回踩");
+    expect(decideCandidateAction({ ...base, tradability: { ...base.tradability, status: "高位拉升" } })).toBe("等待回踩");
+  });
+
+  it("keeps cautious-market breakout pullbacks waiting unless the sector is confirmed and the score is exceptional", () => {
+    const base = {
+      dataCompleteness: {
+        level: "complete",
+        hasHotData: true,
+        hasKlineData: true,
+        hasTechnicalData: true,
+        hasFundFlowData: true,
+        hasSectorData: true,
+        hasProfileData: true,
+        hasCompanyKnowledge: true,
+        missingFields: [],
+        blockingReasons: []
+      },
+      trendState: "above_ma20",
+      fundFlowState: "inflow",
+      buyPointType: ZH.breakoutPullback,
+      buyPointStatus: "有效",
+      marketState: "cautious",
+      sectorStage: ZH.startup,
+      sectorAllowedBuyTypes: [ZH.maPullback, ZH.breakoutPullback],
+      role: ZH.leader,
+      farAboveMa5: false,
+      farAboveMa20: false,
+      tradability: {
+        status: "可买入观察",
+        score: 80,
+        blockers: [],
+        waitFor: "可进入规则仓位评估",
+        nextSessionPlan: { mode: "无", preconditions: [], doNotChase: [], invalidConditions: [] }
+      },
+      strengthScore: 84,
+      sectorEvidenceOk: true
+    } satisfies Parameters<typeof decideCandidateAction>[0];
+
+    expect(decideCandidateAction(base)).toBe("等待回踩");
+    expect(decideCandidateAction({ ...base, sectorStage: ZH.confirmed, sectorAllowedBuyTypes: [ZH.maPullback, ZH.breakoutPullback, ZH.divergenceRepair] })).toBe("小仓试错");
   });
 
   it("allows smaller small-trial positions in cautious markets only for confirmed core opportunities", () => {
@@ -760,6 +1046,48 @@ describe("buildFactPackage rule enhancements", () => {
 
     expect(factPackage.candidates[0]?.dataCompleteness.hasKlineData).toBe(true);
     expect(factPackage.candidates[0]?.dataCompleteness.missingFields).not.toContain("K线");
+  });
+
+  it("matches candidate kline rows by normalized code fields", () => {
+    const stock = stockInput({ close: 102, ma5: 101, ma10: 101, ma20: 100, ma60: 95, mainNetFlow: 100, mainNetFlow5D: 200 });
+    stock.stockKlines = table("kline", ["600001", "--period", "day", "--limit", "30"], [{
+      code: "600001",
+      date: "2026-06-22",
+      last: 102,
+      volume: 10000,
+      amount: 50000000
+    }]);
+
+    const factPackage = buildPackage(stock);
+
+    expect(factPackage.candidates[0]?.dataCompleteness.hasKlineData).toBe(true);
+    expect(factPackage.candidates[0]?.dataCompleteness.blockingReasons.join("\n")).not.toContain("K");
+    expect(factPackage.candidates[0]?.klineSummary?.latestClose).toBe(102);
+  });
+
+  it("keeps core trading data complete even when company knowledge still needs enrichment", () => {
+    const companyKnowledge = buildCompanyKnowledge("sh600001", "测试股份", {
+      code: "sh600001",
+      name: "测试股份",
+      business: "通信设备制造与服务",
+      industry: "通信设备"
+    }, "通信设备", {
+      hasSectorMembership: true,
+      hasBusinessMatch: true,
+      themeMatchType: "direct_constituent",
+      themeMatchLogic: "成分股直接匹配"
+    });
+    const completeness = buildCompleteness(true, true, true, true, true, true, {
+      ...companyKnowledge,
+      companyKnowledgeState: "partial",
+      missingFields: ["财务摘要", "股东户数"]
+    });
+
+    expect(completeness.level).toBe("complete");
+    expect(completeness.coreMarketLevel).toBe("complete");
+    expect(completeness.companyKnowledgeLevel).toBe("partial");
+    expect(completeness.blockingReasons).toHaveLength(0);
+    expect(completeness.missingFields).toContain("公司认知补充字段");
   });
 
   it("builds company knowledge with finance and shareholder summaries", () => {

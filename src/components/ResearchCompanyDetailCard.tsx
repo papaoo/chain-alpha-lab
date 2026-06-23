@@ -2,12 +2,26 @@
 
 import type { AnalysisReport, Fact, StockCandidate } from "@/lib/types";
 import { StockNameHover } from "@/components/ResearchStockHover";
+import { SIGNAL_SCORE_BOUNDARY } from "@/components/ResearchCandidateCommon";
 import { attributionPillClass, formatAction, formatAttributionSourceQuality, formatChainPosition, formatDateTime, formatFundFlow, formatKnowledgeState, formatMoneyDisplay, formatPctDisplay, formatSignedPctDisplay, formatThemeMatch, formatThemeMatchType, formatTrend, localizeText } from "@/components/ResearchCompanyFormatters";
 import { Evidence, Metric, MiniDiagnostic, MiniStat, PlanLine, ScoreBreakdownPanel, SignalBadge, StrengthBadge } from "@/components/ResearchCompanyUi";
 import { CompanyBulletBlock } from "@/components/ResearchCompanyBulletBlock";
 import { CompanyInfoBlock } from "@/components/ResearchCompanyInfoBlock";
+import { SerenityTagPanel } from "@/components/ResearchSerenityTags";
+import { CandidateTriggerGapPanel } from "@/components/ResearchCandidateTriggerGap";
+import type { SerenityResearchTag } from "@/lib/serenity/tagTypes";
 
-export function CompanyDetailCard({ candidate, factMap, report }: { candidate: StockCandidate; factMap: Map<string, Fact>; report: AnalysisReport }) {
+export function CompanyDetailCard({
+  candidate,
+  factMap,
+  report,
+  serenityTag
+}: {
+  candidate: StockCandidate;
+  factMap: Map<string, Fact>;
+  report: AnalysisReport;
+  serenityTag?: SerenityResearchTag;
+}) {
   const card = candidate.companyKnowledge;
   const plan = report.llmResult?.stockPlans.find((item) => item.code === candidate.code);
   const memory = report.factPackage.stockMemories?.find((item) => item.code.toLowerCase() === candidate.code.toLowerCase());
@@ -18,6 +32,7 @@ export function CompanyDetailCard({ candidate, factMap, report }: { candidate: S
         <p className="mt-1 text-xs font-mono text-muted">{candidate.code} / {card.industry || "未知行业"}</p>
       </div>
       <p className="text-sm leading-6 text-muted">{localizeText(card.coreBusiness || card.mainBusiness || "公司基础信息不足。")}</p>
+      <SerenityTagPanel tag={serenityTag} />
       <div className="grid gap-3 sm:grid-cols-2">
         <Metric label="主线匹配" value={formatThemeMatch(card.themeMatch)} />
         <Metric label="匹配类型" value={formatThemeMatchType(card.themeMatchType)} />
@@ -117,6 +132,7 @@ export function CompanyDetailCard({ candidate, factMap, report }: { candidate: S
             {candidate.signalReasons.join("；")}
           </div>
         ) : null}
+        <p className="mt-2 rounded-lg border border-line bg-panel/60 px-3 py-2 text-xs leading-5 text-muted">{SIGNAL_SCORE_BOUNDARY}</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {(candidate.diagnostics ?? []).map((item) => (
             <MiniDiagnostic key={item.label} item={item} />
@@ -124,6 +140,7 @@ export function CompanyDetailCard({ candidate, factMap, report }: { candidate: S
         </div>
         {candidate.diagnostics?.length ? null : <p className="mt-2 text-muted">旧报告暂无强股诊断，重新运行分析后会生成。</p>}
       </div>
+      <CandidateTriggerGapPanel candidate={candidate} />
       {candidate.buyPointEvaluation ? (
         <div className="rounded-lg border border-line bg-bg/60 p-3 text-sm">
           <div className="flex items-center justify-between gap-3">

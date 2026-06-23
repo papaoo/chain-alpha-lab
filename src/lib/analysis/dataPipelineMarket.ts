@@ -1,8 +1,6 @@
-import { eastmoneyAdapter } from "@/lib/eastmoney/adapter";
 import { effectiveTradeDateForSession, inferMarketSessionContext } from "@/lib/market/session";
-import { tushareAdapter } from "@/lib/tushare/adapter";
 import { westockAdapter } from "@/lib/westock/adapter";
-import { toErrorMessage } from "@/lib/analysis/dataPipelineUtils";
+import { marketDataGateway } from "@/lib/data/marketDataGateway";
 import type { ParsedCommandResult } from "@/lib/westock/parser";
 
 export async function fetchSupplementalMarketData(
@@ -22,7 +20,7 @@ export async function fetchSupplementalMarketData(
     warnings.push(`非交易日研究模式：使用上一交易日 ${tradeDate} 的东方财富全A宽度、涨跌停池和板块成分做收盘复盘；这些数据不能视为实时盘口。`);
   }
 
-  const sectorsToFetch = extractSectorsToFetch(boardOverview).slice(0, 8);
+  const sectorsToFetch = marketDataGateway.extractSectorsToFetch(boardOverview).slice(0, 8);
   const shouldFetchBreadth = session.phase !== "premarket" && session.phase !== "call_auction";
   if (!shouldFetchBreadth) {
     warnings.push(`${session.phaseLabel}：全A宽度暂不作为实时确认，等待开盘后行情。`);
@@ -32,13 +30,11 @@ export async function fetchSupplementalMarketData(
   }
 
   const [breadthResult, ztResult, dtResult, zbResult, ...constituentResults] = await Promise.all([
-    shouldFetchBreadth
-      ? eastmoneyAdapter.getMarketBreadth().catch((error) => ({ data: null, warnings: [toErrorMessage(error)] }))
-      : Promise.resolve({ data: null, warnings: [] }),
-    eastmoneyAdapter.getLimitPool("zt", tradeDate).catch((error) => ({ data: null, warnings: [toErrorMessage(error)] })),
-    eastmoneyAdapter.getLimitPool("dt", tradeDate).catch((error) => ({ data: null, warnings: [toErrorMessage(error)] })),
-    eastmoneyAdapter.getLimitPool("zb", tradeDate).catch((error) => ({ data: null, warnings: [toErrorMessage(error)] })),
-    ...sectorsToFetch.map((sector) => fetchSectorConstituentsWithFallback(sector.name, sector.type))
+    marketDataGateway.fetchMarketBreadth(shouldFetchBreadth),
+    marketDataGateway.fetchLimitPool("zt", tradeDate),
+    marketDataGateway.fetchLimitPool("dt", tradeDate),
+    marketDataGateway.fetchLimitPool("zb", tradeDate),
+    ...sectorsToFetch.map((sector) => marketDataGateway.fetchSectorConstituentsWithFallback(sector.name, sector.type))
   ]);
 
   for (const result of [breadthResult, ztResult, dtResult, zbResult, ...constituentResults]) {
@@ -53,47 +49,8 @@ export async function fetchSupplementalMarketData(
   };
 }
 
-async function fetchSectorConstituentsWithFallback(name: string, preferredType: "industry" | "concept") {
-  const fallbackType = preferredType === "industry" ? "concept" : "industry";
-  const first = await eastmoneyAdapter.getSectorConstituents(name, preferredType).catch((error) => ({ data: null, warnings: [toErrorMessage(error)] }));
-  if (first.data) return first;
-  const second = await eastmoneyAdapter.getSectorConstituents(name, fallbackType).catch((error) => ({ data: null, warnings: [toErrorMessage(error)] }));
-  if (second.data) return second;
-  return {
-    data: second.data,
-    warnings: [...first.warnings, ...second.warnings]
-  };
-}
-
-function extractSectorsToFetch(boardOverview: Awaited<ReturnType<typeof westockAdapter.getBoardOverview>>) {
-  const names = new Map<string, { name: string; type: "industry" | "concept" }>();
-  for (const section of boardOverview.sections.filter((item) => item.type === "markdownTable")) {
-    const title = section.title ?? "";
-    const type = title.includes("概念") ? "concept" : "industry";
-    for (const row of section.rows) {
-      const name = row.name ? String(row.name) : "";
-      if (!name || /昨日|连板|首板|涨停|炸板|跌停|破板|ST|融资融券|预盈预增|预亏预减/.test(name)) continue;
-      if (!names.has(name)) names.set(name, { name, type });
-    }
-  }
-  return Array.from(names.values());
-}
-
 function latestMarketKlineTradeDate(marketKlines: ParsedCommandResult[]) {
-  return marketKlines
-    .map((result) => extractLatestKlineTradeDate(result))
-    .filter((date): date is string => Boolean(date))
-    .sort()
-    .at(-1);
-}
-
-function formatTradeDate(timestamp: string) {
-  const date = new Date(timestamp);
-  const cn = new Date(date.toLocaleString("en-US", { timeZone: "Asia/Shanghai" }));
-  const year = cn.getFullYear();
-  const month = String(cn.getMonth() + 1).padStart(2, "0");
-  const day = String(cn.getDate()).padStart(2, "0");
-  return `${year}${month}${day}`;
+  return marketDataGateway.latestMarketKlineTradeDate(marketKlines);
 }
 
 export function buildTradingCalendarVerificationWarnings(input: {
@@ -101,44 +58,14 @@ export function buildTradingCalendarVerificationWarnings(input: {
   session: ReturnType<typeof inferMarketSessionContext>;
   marketKlines: ParsedCommandResult[];
 }) {
-  const expectedTradeDate = effectiveTradeDateForSession(input.timestamp, input.session);
-  const latestDates = input.marketKlines
-    .map((result) => extractLatestKlineTradeDate(result))
-    .filter((date): date is string => Boolean(date));
-  if (latestDates.length === 0) return [];
-
-  const latestMarketDate = latestDates.sort().at(-1);
-  if (!latestMarketDate || latestMarketDate === expectedTradeDate) return [];
-
-  if (latestMarketDate > expectedTradeDate) {
-    return [
-      `交易日历自动校验：指数K线最新日期 ${latestMarketDate} 晚于系统预期交易日 ${expectedTradeDate}，可能存在调休交易日或本地休市日历需要更新。系统将继续使用真实行情数据，但请复核交易日历。`
-    ];
-  }
-
-  if (input.session.isTradingDay && input.session.phase !== "premarket" && input.session.phase !== "call_auction") {
-    return [
-      `交易日历自动校验：系统预期交易日为 ${expectedTradeDate}，但指数K线最新日期为 ${latestMarketDate}，行情数据可能尚未刷新或接口返回滞后。盘中结论需降级确认。`
-    ];
-  }
-
-  return [];
+  return marketDataGateway.buildTradingCalendarVerificationWarnings(input);
 }
 
 export async function buildTushareTradingCalendarWarnings(
   timestamp: string,
   session: ReturnType<typeof inferMarketSessionContext>
 ) {
-  if (!tushareAdapter.isEnabled()) return [];
-  const expectedTradeDate = effectiveTradeDateForSession(timestamp, session);
-  const result = await tushareAdapter.getTradeCalendar(expectedTradeDate, expectedTradeDate);
-  const warnings = [...result.warnings];
-  const day = result.data[0];
-  if (!day) return warnings;
-  if (session.isTradingDay && !day.isOpen) {
-    warnings.push(`Tushare 交易日历校验：${expectedTradeDate} 为非交易日，但系统当前按交易日处理，请复核本地交易日历。`);
-  }
-  return warnings;
+  return marketDataGateway.buildTushareTradingCalendarWarnings(timestamp, session);
 }
 
 export function latestReportPeriod(tradeDate: string) {
@@ -148,20 +75,4 @@ export function latestReportPeriod(tradeDate: string) {
   if (monthDay >= "0831") return `${year}0630`;
   if (monthDay >= "0430") return `${year}0331`;
   return `${year - 1}1231`;
-}
-
-function extractLatestKlineTradeDate(result: ParsedCommandResult) {
-  const dates = result.sections
-    .filter((section) => section.type === "markdownTable")
-    .flatMap((section) => section.rows)
-    .map((row) => normalizeTradeDateCell(row.date ?? row.Date ?? row.日期 ?? row.tradeDate ?? row.trade_date))
-    .filter((date): date is string => Boolean(date));
-  return dates.sort().at(-1);
-}
-
-function normalizeTradeDateCell(value: unknown) {
-  if (value === null || value === undefined) return undefined;
-  const raw = String(value).trim();
-  const compact = raw.replace(/[./-]/g, "");
-  return /^\d{8}$/.test(compact) ? compact : undefined;
 }

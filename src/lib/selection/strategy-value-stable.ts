@@ -1,6 +1,6 @@
 import { loadCandidatePool, latestDisplayableReport, refreshCandidatePool } from "@/lib/selection/candidate-pool";
 import { calculateSelectionBlockerPenalty, decideActionByScore, normalizeSelectionBlockers } from "@/lib/selection/risk-utils";
-import { factor, booleanParam, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText } from "@/lib/selection/scoring-utils";
+import { factor, booleanParam, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText, selectionDataFreshness, selectionRuntimeSnapshot } from "@/lib/selection/scoring-utils";
 import { financialEvidenceRefs, hasValidPb, hasValidPe, isBankLike } from "@/lib/selection/strategy-financial-utils";
 import type {
   SelectionPick,
@@ -107,6 +107,8 @@ function scoreValueStableCandidate(candidate: StockCandidate, parameters: Record
     sectorName: candidate.sectorName,
     price: candidate.price ?? candidate.quote?.latest,
     changePct,
+    dataFreshness: selectionDataFreshness(candidate),
+    runtimeSnapshot: selectionRuntimeSnapshot(candidate),
     score,
     tier: tierFromScore(score),
     action,

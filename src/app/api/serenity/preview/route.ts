@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildSerenityCandidatePreview } from "@/lib/serenity/candidateBuilder";
+import { enrichSerenityCandidatesWithEvidence } from "@/lib/serenity/evidenceCollector";
 import { buildSerenityThemePreview } from "@/lib/serenity/themes";
 import type { SerenityMarket } from "@/lib/serenity/types";
 
@@ -25,12 +26,16 @@ export async function POST(request: Request) {
       normalizedTheme: base.normalizedTheme,
       limit: 24
     });
+    const enriched = await enrichSerenityCandidatesWithEvidence(candidateBuild.candidates, {
+      theme,
+      limit: 12
+    });
     const data = buildSerenityThemePreview({
       theme,
       market: base.market,
       timeWindow: body.timeWindow,
-      candidatePreview: candidateBuild.candidates,
-      extraWarnings: candidateBuild.warnings
+      candidatePreview: enriched.candidates,
+      extraWarnings: [...candidateBuild.warnings, ...enriched.warnings]
     });
     return NextResponse.json({ success: true, data, error: null });
   } catch (error) {

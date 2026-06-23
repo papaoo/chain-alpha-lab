@@ -1,44 +1,8 @@
 import { NextResponse } from "next/server";
-import { eastmoneyAdapter } from "@/lib/eastmoney/adapter";
+import { marketDataGateway, type BoardMomentum } from "@/lib/data/marketDataGateway";
 import { effectiveTradeDateForSession, inferMarketSessionContext } from "@/lib/market/session";
 
 export const dynamic = "force-dynamic";
-
-type BoardType = "industry" | "concept";
-
-type RawBoardQuote = {
-  f2?: number | string;
-  f3?: number | string;
-  f4?: number | string;
-  f5?: number | string;
-  f8?: number | string;
-  f12?: string;
-  f14?: string;
-  f20?: number | string;
-  f62?: number | string;
-  f104?: number | string;
-  f105?: number | string;
-  f128?: string;
-  f136?: number | string;
-};
-
-type BoardMomentum = {
-  rank: number;
-  code: string;
-  name: string;
-  type: BoardType;
-  latest?: number;
-  changePct?: number;
-  turnoverRate?: number;
-  totalMarketValue?: number;
-  mainNetInflow?: number;
-  upCount?: number;
-  downCount?: number;
-  leadStock?: string;
-  leadStockChangePct?: number;
-  breadthPct?: number;
-  capitalIntensity?: number;
-};
 
 export async function GET() {
   const startedAt = Date.now();
@@ -48,12 +12,12 @@ export async function GET() {
   const tradeDate = effectiveTradeDateForSession(timestamp, session);
 
   const [breadth, limitUp, limitDown, openBoard, industries, concepts] = await Promise.all([
-    eastmoneyAdapter.getMarketBreadth().catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
-    eastmoneyAdapter.getLimitPool("zt", tradeDate).catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
-    eastmoneyAdapter.getLimitPool("dt", tradeDate).catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
-    eastmoneyAdapter.getLimitPool("zb", tradeDate).catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
-    fetchBoardMomentum("industry", 36).catch((error) => ({ data: [], warnings: [errorMessage(error)] })),
-    fetchBoardMomentum("concept", 24).catch((error) => ({ data: [], warnings: [errorMessage(error)] }))
+    marketDataGateway.fetchMarketBreadth(true).catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
+    marketDataGateway.fetchLimitPool("zt", tradeDate).catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
+    marketDataGateway.fetchLimitPool("dt", tradeDate).catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
+    marketDataGateway.fetchLimitPool("zb", tradeDate).catch((error) => ({ data: null, warnings: [errorMessage(error)] })),
+    marketDataGateway.fetchBoardMomentum("industry", 36).catch((error) => ({ data: [], warnings: [errorMessage(error)] })),
+    marketDataGateway.fetchBoardMomentum("concept", 24).catch((error) => ({ data: [], warnings: [errorMessage(error)] }))
   ]);
 
   warnings.push(...breadth.warnings, ...limitUp.warnings, ...limitDown.warnings, ...openBoard.warnings, ...industries.warnings, ...concepts.warnings);
@@ -104,61 +68,6 @@ export async function GET() {
   });
 }
 
-async function fetchBoardMomentum(type: BoardType, limit: number) {
-  const fs = type === "industry" ? "m:90+t:2+f:!50" : "m:90+t:3+f:!50";
-  const url = "https://push2delay.eastmoney.com/api/qt/clist/get";
-  const params = new URLSearchParams({
-    pz: String(Math.min(Math.max(limit, 20), 100)),
-    po: "1",
-    np: "1",
-    ut: "bd1d9ddb04089700cf9c27f6f7426281",
-    fltt: "2",
-    invt: "2",
-    fid: type === "industry" ? "f3" : "f12",
-    fs,
-    fields: "f2,f3,f4,f5,f8,f12,f14,f20,f62,f104,f105,f128,f136",
-    pn: "1"
-  });
-  const sourceUrl = `${url}?${params.toString()}`;
-  const response = await fetch(sourceUrl, {
-    cache: "no-store",
-    headers: {
-      "user-agent": "Mozilla/5.0 AShareMainlineAssistant/0.1",
-      referer: "https://quote.eastmoney.com/"
-    }
-  });
-  if (!response.ok) throw new Error(`东方财富板块列表 HTTP ${response.status}`);
-  const json = await response.json() as { data?: { diff?: RawBoardQuote[] } };
-  const rows = json.data?.diff ?? [];
-  return {
-    data: rows.slice(0, limit).map((row, index): BoardMomentum => {
-      const upCount = numberValue(row.f104);
-      const downCount = numberValue(row.f105);
-      const total = (upCount ?? 0) + (downCount ?? 0);
-      const totalMarketValue = numberValue(row.f20);
-      const mainNetInflow = numberValue(row.f62);
-      return {
-        rank: index + 1,
-        code: String(row.f12 ?? ""),
-        name: String(row.f14 ?? ""),
-        type,
-        latest: numberValue(row.f2),
-        changePct: numberValue(row.f3),
-        turnoverRate: numberValue(row.f8),
-        totalMarketValue,
-        mainNetInflow,
-        upCount,
-        downCount,
-        leadStock: stringValue(row.f128),
-        leadStockChangePct: numberValue(row.f136),
-        breadthPct: total ? Number((((upCount ?? 0) / total) * 100).toFixed(1)) : undefined,
-        capitalIntensity: totalMarketValue && mainNetInflow !== undefined ? mainNetInflow / totalMarketValue : undefined
-      };
-    }).filter((item) => item.code && item.name),
-    warnings: rows.length ? [] : [`东方财富${type === "industry" ? "行业" : "概念"}板块列表返回空数据`]
-  };
-}
-
 function compositeBoardScore(item: BoardMomentum) {
   const change = item.changePct ?? 0;
   const breadth = item.breadthPct ?? 50;
@@ -182,16 +91,6 @@ function isBefore(value: string | undefined, target: string) {
 
 function percent(count: number, total: number) {
   return total ? Number(((count / total) * 100).toFixed(1)) : 0;
-}
-
-function numberValue(value: unknown) {
-  if (value === null || value === undefined || value === "" || value === "-") return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function stringValue(value: unknown) {
-  return value === null || value === undefined || value === "" || value === "-" ? undefined : String(value);
 }
 
 function errorMessage(error: unknown) {

@@ -18,7 +18,7 @@ export function ReportView({
   factMap: Map<string, Fact>;
   onSelectReport: (id: string) => Promise<void>;
 }) {
-  if (!report) return <EmptyState />;
+  if (!report) return <EmptyState reports={reports} />;
   return (
     <section className="grid gap-4 xl:grid-cols-[1fr_420px]">
       <Panel>
@@ -65,11 +65,33 @@ export function ReportView({
 
 
 
-export function EmptyState() {
+export function EmptyState({ reports = [] }: { reports?: ReportSummary[] }) {
+  const hasReportSummary = reports.length > 0;
   return (
     <Panel>
-      <SectionTitle icon={Database} title="暂无报告" meta="运行分析后会生成真实报告" />
-      <p className="mt-4 text-sm text-muted">SQLite 中还没有已保存报告，请点击“运行今日分析”。</p>
+      <SectionTitle
+        icon={Database}
+        title={hasReportSummary ? "报告详情待加载" : "暂无可展示报告"}
+        meta={hasReportSummary ? `${reports.length} 份报告摘要可用` : "运行分析后会生成真实报告"}
+      />
+      <p className="mt-4 text-sm leading-6 text-muted">
+        {hasReportSummary
+          ? "系统已经读取到报告摘要，但详情尚未进入当前视图。请稍等刷新，或在历史研报中打开指定报告；页面不会用空事实包生成候选股动作判断。"
+          : "当前没有通过质量门的可展示报告。请点击“运行今日分析”；如果数据库中存在旧报告但未展示，说明它可能被标记为不可展示或详情 JSON 需要复核。"}
+      </p>
+      {hasReportSummary ? (
+        <div className="mt-4 grid gap-2">
+          {reports.slice(0, 3).map((item) => (
+            <div key={item.id} className="rounded-lg border border-line bg-bg/60 px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium text-text">{localizeText(item.title)}</span>
+                <span className="text-muted">{formatDateTime(item.createdAt)}</span>
+              </div>
+              <p className="mt-1 line-clamp-2 leading-5 text-muted">{localizeText(item.summary)}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </Panel>
   );
 }
@@ -220,5 +242,4 @@ function formatLlmStatus(status: AnalysisReport["llmStatus"]) {
   };
   return labels[status] ?? status;
 }
-
 

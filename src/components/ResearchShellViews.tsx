@@ -21,15 +21,19 @@ import type { AnalysisReport, AppSettings } from "@/lib/types";
 export function ResearchTopCommandBar({
   view,
   report,
+  reportSummary,
   runAnalysis,
   loading
 }: {
   view: StrategyWorkspaceView;
   report: AnalysisReport | null;
+  reportSummary?: Pick<AnalysisReport, "llmStatus" | "reportStatus" | "createdAt"> | null;
   runAnalysis: () => void;
   loading: boolean;
 }) {
   const title = viewTitle(view);
+  const llmStatus = report?.llmStatus ?? reportSummary?.llmStatus;
+  const llmStatusLabel = llmStatus ? formatLlmStatus(llmStatus) : null;
   const marketTone =
     report?.ruleResult.market.marketState === "tradable"
       ? "up"
@@ -57,8 +61,8 @@ export function ResearchTopCommandBar({
           />
           <OverviewStatusPill
             icon={BrainCircuit}
-            label={report ? formatLlmStatus(report.llmStatus) : "模型待命"}
-            tone={report?.llmStatus === "success" ? "up" : "info"}
+            label={llmStatusLabel ?? "模型待命"}
+            tone={llmStatus === "success" ? "up" : "info"}
           />
           <button
             className="flex items-center gap-2 rounded-lg border border-up/40 bg-up/10 px-3 py-2 text-sm text-up disabled:opacity-60"

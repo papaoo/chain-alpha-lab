@@ -15,7 +15,9 @@ export async function POST(request: Request) {
       keypointTimes: body.keypointTimes,
       deepResearchTimes: body.deepResearchTimes,
       llmOnEvent: typeof body.llmOnEvent === "boolean" ? body.llmOnEvent : undefined,
-      pushNotification: typeof body.pushNotification === "boolean" ? body.pushNotification : undefined
+      pushNotification: typeof body.pushNotification === "boolean" ? body.pushNotification : undefined,
+      auctionWatchlistPushEnabled: typeof body.auctionWatchlistPushEnabled === "boolean" ? body.auctionWatchlistPushEnabled : undefined,
+      riskWarningPushEnabled: typeof body.riskWarningPushEnabled === "boolean" ? body.riskWarningPushEnabled : undefined
     });
     return NextResponse.json({ success: true, data, error: null });
   } catch (error) {

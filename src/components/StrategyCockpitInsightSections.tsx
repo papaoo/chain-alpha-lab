@@ -99,9 +99,11 @@ export function StrategyMapPanel() {
     <Panel title="策略扩展地图" icon={Activity} action={<span className="text-xs text-slate-500">模块化扩展</span>} collapsible defaultOpen={false}>
       <div className="grid gap-3 md:grid-cols-2">
         <StrategyCard title="主线趋势" status="运行中" body="当前主策略，保留完整证据链和风控边界。" />
+        <StrategyCard title="策略选股" status="运行中" body="六类策略先跑规则精选，Agent 只在证据链内做复核。" />
+        <StrategyCard title="个股追踪" status="运行中" body="加入观察后记录基准价，刷新快照计算加入后涨跌和状态迁移。" />
+        <StrategyCard title="瓶颈研究" status="研究中" body="从主题、产业链层级和稀缺环节推导 A 股候选，沉淀长期线索。" />
         <StrategyCard title="连板接力" status="规划中" body="独立接入涨停池、连板梯队和情绪周期。" />
         <StrategyCard title="小盘策略" status="规划中" body="独立处理市值、流动性和量价异动。" />
-        <StrategyCard title="个股追踪" status="待开发" body="模拟买入后生成跟踪计划和预警。" />
       </div>
     </Panel>
   );

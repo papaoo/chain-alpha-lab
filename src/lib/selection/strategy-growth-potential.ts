@@ -1,6 +1,6 @@
 import { loadCandidatePool, latestDisplayableReport, refreshCandidatePool, type LatestAnalysisReport } from "@/lib/selection/candidate-pool";
 import { calculateSelectionBlockerPenalty, decideActionByScore, hasSelectionHardBlock, normalizeSelectionBlockers } from "@/lib/selection/risk-utils";
-import { factor, booleanParam, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText } from "@/lib/selection/scoring-utils";
+import { factor, booleanParam, numberParam, splitPassedAndRejected, stringParam, tierFromScore, uniqueText, selectionDataFreshness, selectionRuntimeSnapshot } from "@/lib/selection/scoring-utils";
 import { financialEvidenceRefs, formatYi, growthAtLeast, isLargeCap, isLowVolFinancial } from "@/lib/selection/strategy-financial-utils";
 import type {
   SelectionPick,
@@ -125,6 +125,8 @@ function scoreGrowthCandidate(
     sectorName: sector?.name ?? candidate.sectorName,
     price: candidate.price ?? candidate.quote?.latest,
     changePct,
+    dataFreshness: selectionDataFreshness(candidate),
+    runtimeSnapshot: selectionRuntimeSnapshot(candidate),
     score,
     tier: tierFromScore(score),
     action,

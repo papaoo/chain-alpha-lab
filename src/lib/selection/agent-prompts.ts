@@ -68,9 +68,10 @@ ${AGENT_SCHEMA}
 
 篇幅要求：
 1. 每个 Agent 的 summary 不超过 80 个汉字。
-2. 每个 Agent 的 stockOpinions 最多 5 条。
-3. finalReview.finalPicks 最多 5 条。
-4. 每个 logic、risk 不超过 80 个汉字。
+2. 每个 Agent 的 stockOpinions 最多 2 条，只覆盖最重要的支持/回避对象。
+3. finalReview.finalPicks 最多 3 条。
+4. 每个 logic、risk 不超过 45 个汉字。
+5. missingData、riskFlags、watchConditions、invalidConditions 每组最多 3 条，每条不超过 35 个汉字。
 
 分析重点：
 1. 资金流向分析师：判断资金连续性、当日与多日资金是否背离、是否是假反弹。
@@ -85,9 +86,9 @@ ${JSON.stringify(context, null, 2)}`;
 }
 
 function buildSelectionAgentContext(strategy: SelectionStrategyDefinition, ruleResult: SelectionRunResult) {
-  const topPicks = ruleResult.picks.slice(0, 6).map(compactPick);
-  const rejected = ruleResult.rejected.slice(0, 6).map(compactPick);
-  const allowedEvidenceRefs = Array.from(new Set([...topPicks, ...rejected].flatMap((pick) => pick.evidenceRefs))).slice(0, 200);
+  const topPicks = ruleResult.picks.slice(0, 4).map(compactPick);
+  const rejected = representativeRejectedPicks(ruleResult).map(compactPick);
+  const allowedEvidenceRefs = Array.from(new Set([...topPicks, ...rejected].flatMap((pick) => pick.evidenceRefs))).slice(0, 60);
   return {
     strategy: {
       id: strategy.id,
@@ -96,7 +97,7 @@ function buildSelectionAgentContext(strategy: SelectionStrategyDefinition, ruleR
       riskLevel: strategy.riskLevel,
       cycle: strategy.cycle,
       hardFilters: strategy.hardFilters.slice(0, 5),
-      scoreFactors: strategy.scoreFactors.map((factor) => ({
+      scoreFactors: strategy.scoreFactors.slice(0, 6).map((factor) => ({
         key: factor.key,
         label: factor.label,
         weight: factor.weight
@@ -109,10 +110,14 @@ function buildSelectionAgentContext(strategy: SelectionStrategyDefinition, ruleR
       parameters: ruleResult.parameters,
       sourceReportId: ruleResult.sourceReportId,
       sourceReportCreatedAt: ruleResult.sourceReportCreatedAt,
+      sourceReportTradeDate: ruleResult.sourceReportTradeDate,
+      runEffectiveTradeDate: ruleResult.runEffectiveTradeDate,
+      freshnessStatus: ruleResult.freshnessStatus,
       dataBasis: ruleResult.dataBasis,
       warnings: ruleResult.warnings.slice(0, 6),
       pickCount: ruleResult.picks.length,
-      rejectedCount: ruleResult.rejected.length
+      rejectedCount: ruleResult.rejected.length,
+      contextPolicy: "仅提供规则精选候选和少量代表性剔除样本；Agent 不应扩大候选池。"
     },
     rulePicks: topPicks,
     ruleRejected: rejected,
@@ -127,13 +132,47 @@ function compactPick(pick: SelectionRunResult["picks"][number]) {
     code: pick.code,
     name: pick.name,
     sectorName: pick.sectorName,
-    price: pick.price,
-    changePct: pick.changePct,
+    price: pick.runtimeSnapshot?.latestPrice ?? pick.price,
+    changePct: pick.runtimeSnapshot?.changePct ?? pick.changePct,
     score: pick.score,
     tier: pick.tier,
     action: pick.action,
-    reasons: pick.reasons.slice(0, 3),
-    blockers: pick.blockers.slice(0, 4),
+    reasons: pick.reasons.slice(0, 2),
+    blockers: pick.blockers.slice(0, 3),
+    dataFreshness: pick.dataFreshness
+      ? {
+          basis: pick.dataFreshness.basis,
+          label: pick.dataFreshness.label,
+          quote: pick.dataFreshness.quote,
+          kline: pick.dataFreshness.kline,
+          fundFlow: pick.dataFreshness.fundFlow,
+          warnings: pick.dataFreshness.warnings.slice(0, 2)
+        }
+      : undefined,
+    runtimeSnapshot: pick.runtimeSnapshot
+      ? {
+          fetchedAt: pick.runtimeSnapshot.fetchedAt,
+          source: pick.runtimeSnapshot.source,
+          basis: pick.runtimeSnapshot.basis,
+          quoteUpdatedAt: pick.runtimeSnapshot.quoteUpdatedAt,
+          latestKlineDate: pick.runtimeSnapshot.latestKlineDate,
+          expectedKlineDate: pick.runtimeSnapshot.expectedKlineDate,
+          klineFreshnessStatus: pick.runtimeSnapshot.klineFreshnessStatus,
+          klineClose: pick.runtimeSnapshot.klineClose,
+          latestPrice: pick.runtimeSnapshot.latestPrice,
+          changePct: pick.runtimeSnapshot.changePct,
+          turnoverRate: pick.runtimeSnapshot.turnoverRate,
+          mainNetInflow: pick.runtimeSnapshot.mainNetInflow,
+          actionability: pick.runtimeSnapshot.actionability
+            ? {
+                level: pick.runtimeSnapshot.actionability.level,
+                label: pick.runtimeSnapshot.actionability.label,
+                reason: pick.runtimeSnapshot.actionability.reason
+              }
+            : undefined,
+          warnings: pick.runtimeSnapshot.warnings.slice(0, 2)
+        }
+      : undefined,
     scoreFactors: pick.scoreFactors.map((factor) => ({
       key: factor.key,
       label: factor.label,
@@ -141,7 +180,29 @@ function compactPick(pick: SelectionRunResult["picks"][number]) {
       maxScore: factor.maxScore,
       reasons: factor.reasons.slice(0, 1),
       blockers: factor.blockers.slice(0, 1)
-    })),
-    evidenceRefs: pick.evidenceRefs.slice(0, 8)
+    })).slice(0, 6),
+    evidenceRefs: pick.evidenceRefs.slice(0, 6)
   };
+}
+
+function representativeRejectedPicks(ruleResult: SelectionRunResult) {
+  const seenBlockers = new Set<string>();
+  const representatives: SelectionRunResult["rejected"] = [];
+  for (const pick of ruleResult.rejected) {
+    const blockerKey = compactBlockerKey(pick.blockers[0] ?? pick.scoreFactors.find((factor) => factor.blockers[0])?.blockers[0] ?? "unknown");
+    if (seenBlockers.has(blockerKey) && representatives.length >= 3) continue;
+    seenBlockers.add(blockerKey);
+    representatives.push(pick);
+    if (representatives.length >= 3) break;
+  }
+  return representatives;
+}
+
+function compactBlockerKey(value: string) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (/涨停|不可达|追高/.test(text)) return "price_unreachable";
+  if (/资金|流出/.test(text)) return "fund_flow";
+  if (/数据|缺失|未接入/.test(text)) return "data_gap";
+  if (/主线|板块/.test(text)) return "sector_match";
+  return text.slice(0, 24) || "unknown";
 }

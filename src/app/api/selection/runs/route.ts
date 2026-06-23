@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSelectionRun, listSelectionRuns, listSelectionRunSummaries } from "@/lib/selection/runs";
+import { createSelectionRun, listSelectionRuns, listSelectionRunSummaries, startSelectionRunJob } from "@/lib/selection/runs";
 import type { SelectionRunRequest } from "@/lib/selection/types";
 
 export const dynamic = "force-dynamic";
@@ -18,13 +18,19 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const sync = searchParams.get("sync") === "1";
     const body = (await request.json().catch(() => ({}))) as Partial<SelectionRunRequest>;
-    const data = await createSelectionRun({
+    const payload = {
       strategyId: body.strategyId ?? "main_force_accumulation",
       mode: body.mode ?? "rule",
       parameters: body.parameters ?? {}
-    });
-    return NextResponse.json({ success: true, data, error: null });
+    } satisfies SelectionRunRequest;
+    const data = sync ? await createSelectionRun(payload) : startSelectionRunJob(payload);
+    return NextResponse.json(
+      { success: true, data, error: null, async: !sync },
+      { status: sync ? 200 : 202 }
+    );
   } catch (error) {
     return NextResponse.json(
       {

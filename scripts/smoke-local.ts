@@ -4,15 +4,33 @@ type SmokeTarget = {
   name: string;
   path: string;
   expectJson?: boolean;
+  method?: "GET" | "POST";
+  body?: unknown;
 };
 
 const targets: SmokeTarget[] = [
-  { name: "首页驾驶舱", path: "/" },
-  { name: "主线配置视图", path: "/mainline?view=settings" },
-  { name: "候选股锚点视图", path: "/mainline?view=mainline&anchor=candidate-signals" },
-  { name: "模型配置 API", path: "/api/settings", expectJson: true },
-  { name: "数据源配置 API", path: "/api/data-settings", expectJson: true },
-  { name: "交易时段 API", path: "/api/market-session", expectJson: true }
+  { name: "home", path: "/" },
+  { name: "mainline settings", path: "/mainline?view=settings" },
+  { name: "mainline candidate signals", path: "/mainline?view=mainline&anchor=candidate-signals" },
+  { name: "selection workspace", path: "/mainline?view=selection" },
+  { name: "premarket scout", path: "/mainline?view=premarket" },
+  { name: "serenity bottleneck research", path: "/mainline?view=serenity" },
+  { name: "stock tracking", path: "/mainline?view=tracking" },
+  { name: "selection runs page", path: "/selection/runs" },
+  { name: "selection runs summary api", path: "/api/selection/runs?limit=1", expectJson: true },
+  { name: "settings api", path: "/api/settings", expectJson: true },
+  { name: "data settings api", path: "/api/data-settings", expectJson: true },
+  { name: "market session api", path: "/api/market-session", expectJson: true },
+  { name: "premarket snapshot api", path: "/api/premarket/snapshot", expectJson: true },
+  { name: "data source health api", path: "/api/data-source-health?limit=20", expectJson: true },
+  { name: "model usage api", path: "/api/model-usage?windowDays=30&limit=20", expectJson: true },
+  { name: "tracking items api", path: "/api/tracking/items?status=active", expectJson: true },
+  { name: "tracking refresh api", path: "/api/tracking/refresh", expectJson: true, method: "POST", body: { preferRealtime: true } },
+  { name: "auction watchlist api", path: "/api/auction-watchlist?limit=80&itemLimit=6", expectJson: true },
+  { name: "serenity themes api", path: "/api/serenity/themes?q=AI&market=A-share&limit=3", expectJson: true },
+  { name: "serenity runs api", path: "/api/serenity/runs?limit=3", expectJson: true },
+  { name: "serenity tags api", path: "/api/serenity/tags?codes=sh603019,sz002463&lookback=10", expectJson: true },
+  { name: "serenity mainline import api", path: "/api/serenity/import/mainline?market=A-share&limit=3", expectJson: true }
 ];
 
 async function main() {
@@ -22,7 +40,14 @@ async function main() {
     const url = new URL(target.path, baseUrl).toString();
     const startedAt = Date.now();
     try {
-      const response = await fetch(url, { headers: { "user-agent": "a-share-smoke/1.0" } });
+      const response = await fetch(url, {
+        method: target.method ?? "GET",
+        headers: {
+          "user-agent": "chain-alpha-smoke/1.0",
+          ...(target.body ? { "content-type": "application/json" } : {})
+        },
+        body: target.body ? JSON.stringify(target.body) : undefined
+      });
       const elapsedMs = Date.now() - startedAt;
       const text = await response.text();
       if (!response.ok) {
@@ -31,13 +56,13 @@ async function main() {
       }
       if (target.expectJson) {
         const parsed = safeJson(text);
-        if (!parsed || parsed.success !== true) failures.push(`${target.name} JSON 契约异常`);
+        if (!parsed || parsed.success !== true) failures.push(`${target.name} JSON contract failed`);
       } else if (!text.trim()) {
-        failures.push(`${target.name} 返回空页面`);
+        failures.push(`${target.name} returned an empty page`);
       }
       console.log(`OK ${target.name} ${response.status} ${elapsedMs}ms`);
     } catch (error) {
-      failures.push(`${target.name} 请求失败：${error instanceof Error ? error.message : String(error)}`);
+      failures.push(`${target.name} request failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

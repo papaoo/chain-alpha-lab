@@ -80,7 +80,7 @@ export function AccessWorkspace({ view }: { view: AccessView }) {
             <Icon size={26} />
           </span>
           <div>
-            <p className="text-xs tracking-[0.18em] text-info">ACCESS CONTROL</p>
+            <p className="text-xs tracking-[0.18em] text-info">权限控制</p>
             <h2 className="mt-2 text-3xl font-semibold">{viewCopy[view].title}</h2>
             <p className="mt-3 max-w-4xl text-sm leading-6 text-muted">{viewCopy[view].subtitle}</p>
           </div>

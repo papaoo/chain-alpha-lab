@@ -1,5 +1,6 @@
 import type { LimitPoolSnapshot, SectorConstituentSnapshot, SectorCoreStockSnapshot, SectorSnapshot } from "@/lib/types";
 import { normalizeSectorName } from "@/lib/sector/normalization";
+import { isAshareStockCode, normalizeStockCode } from "@/lib/strategy/candidateUtils";
 
 export function buildSectorCoreStocks(
   sector: SectorSnapshot,
@@ -7,17 +8,18 @@ export function buildSectorCoreStocks(
   ztPools: LimitPoolSnapshot[],
   zbPools: LimitPoolSnapshot[]
 ): SectorCoreStockSnapshot[] {
-  if (!stocks.length) return buildFallbackSectorCoreStocks(sector, ztPools, zbPools);
-  const limitUpByCode = new Map(ztPools.flatMap((pool) => pool.stocks.map((stock) => [stock.marketCode || stock.code, stock] as const)));
-  const openBoardByCode = new Map(zbPools.flatMap((pool) => pool.stocks.map((stock) => [stock.marketCode || stock.code, stock] as const)));
+  const ashareStocks = stocks.filter((stock) => isAshareStockCode(stock.marketCode || stock.code));
+  if (!ashareStocks.length) return buildFallbackSectorCoreStocks(sector, ztPools, zbPools);
+  const limitUpByCode = new Map(ztPools.flatMap((pool) => pool.stocks.map((stock) => [normalizeStockCode(stock.marketCode || stock.code), stock] as const)));
+  const openBoardByCode = new Map(zbPools.flatMap((pool) => pool.stocks.map((stock) => [normalizeStockCode(stock.marketCode || stock.code), stock] as const)));
   const leadName = parseLeadStockName(sector.leadStock);
-  const amounts = stocks.map((stock) => stock.amount).filter((value): value is number => value !== undefined).sort((a, b) => b - a);
-  const floatValues = stocks.map((stock) => stock.floatMarketValue).filter((value): value is number => value !== undefined).sort((a, b) => b - a);
+  const amounts = ashareStocks.map((stock) => stock.amount).filter((value): value is number => value !== undefined).sort((a, b) => b - a);
+  const floatValues = ashareStocks.map((stock) => stock.floatMarketValue).filter((value): value is number => value !== undefined).sort((a, b) => b - a);
   const amountTop = amounts[Math.min(4, amounts.length - 1)] ?? 0;
   const floatTop = floatValues[Math.min(4, floatValues.length - 1)] ?? 0;
 
-  const scored = stocks.map((stock) => {
-    const key = stock.marketCode || stock.code;
+  const scored = ashareStocks.map((stock) => {
+    const key = normalizeStockCode(stock.marketCode || stock.code);
     const limitUp = limitUpByCode.get(key);
     const openBoard = openBoardByCode.get(key);
     const change = stock.changePct ?? 0;

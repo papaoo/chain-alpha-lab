@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   Activity,
@@ -31,6 +31,7 @@ import {
   WalletCards,
   Zap
 } from "lucide-react";
+import { fetchApiJson } from "@/lib/client/api";
 import type { AnalysisReport, AppSettings } from "@/lib/types";
 
 export type StrategyWorkspaceView =
@@ -76,17 +77,21 @@ type NavGroup = {
 
 export function StrategyShellNav({
   report,
+  reportSummary,
   settings,
   currentView,
   onNavigate
 }: {
   report: AnalysisReport | null;
+  reportSummary?: Pick<AnalysisReport, "llmStatus" | "reportStatus" | "createdAt"> | null;
   settings: AppSettings | null;
   currentView?: StrategyWorkspaceView;
   onNavigate?: (target: NavTarget) => void;
 }) {
   const pathname = usePathname();
-  const groups = useMemo(() => buildNavGroups(), []);
+  const latestLlmStatus = report?.llmStatus ?? reportSummary?.llmStatus;
+  const [riskBadge, setRiskBadge] = useState("试运行");
+  const groups = useMemo(() => buildNavGroups(riskBadge), [riskBadge]);
   const activeGroupIds = useMemo(
     () =>
       new Set(
@@ -99,6 +104,26 @@ export function StrategyShellNav({
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(groups.map((group) => [group.id, group.defaultOpen ?? true]))
   );
+
+  useEffect(() => {
+    let alive = true;
+    fetchApiJson<{ summary?: { high?: number; medium?: number; stale?: boolean } }>("/api/risk/warnings", { cache: "no-store" })
+      .then((json) => {
+        if (!alive) return;
+        const summary = json.data?.summary;
+        if (!summary) return;
+        if ((summary.high ?? 0) > 0) setRiskBadge(`高 ${summary.high}`);
+        else if ((summary.medium ?? 0) > 0) setRiskBadge(`中 ${summary.medium}`);
+        else if (summary.stale) setRiskBadge("过期");
+        else setRiskBadge("正常");
+      })
+      .catch(() => {
+        if (alive) setRiskBadge("待查");
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   return (
     <aside className="border-b border-slate-800/80 bg-slate-950/88 px-4 py-4 backdrop-blur-xl xl:sticky xl:top-0 xl:h-[100dvh] xl:border-b-0 xl:border-r">
@@ -148,7 +173,7 @@ export function StrategyShellNav({
         <div className="rounded-2xl border border-slate-800 bg-slate-900/62 p-4 text-xs">
           <InfoRow label="模型服务" value={settings?.enabled ? "已启用" : "未启用"} />
           <div className="mt-2">
-            <InfoRow label="最新报告" value={report ? formatLlmStatus(report.llmStatus) : "暂无"} />
+            <InfoRow label="最新报告" value={latestLlmStatus ? formatLlmStatus(latestLlmStatus) : "暂无"} />
           </div>
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-800">
             <div className="signal-sweep h-full w-2/3 rounded-full bg-cyan-300" />
@@ -202,7 +227,7 @@ function StrategyNavItem({
   );
 }
 
-function buildNavGroups(): NavGroup[] {
+function buildNavGroups(riskBadge = "试运行"): NavGroup[] {
   return [
     {
       id: "workspace",
@@ -239,7 +264,7 @@ function buildNavGroups(): NavGroup[] {
         { id: "serenity", label: "瓶颈研究", meta: "产业链卡点 / 证据链", icon: Sparkles, target: { view: "serenity" }, badge: "新" },
         { id: "tracking", label: "个股追踪", meta: "模拟买入 / AI 盯盘", icon: Radar, target: { view: "tracking" }, badge: "核心" },
         { id: "portfolio", label: "模拟持仓", meta: "仓位 / 盈亏 / 复盘", icon: WalletCards, target: { view: "portfolio" }, badge: "规划" },
-        { id: "risk", label: "风险预警", meta: "失效条件 / 推送", icon: BellRing, target: { view: "risk" }, badge: "规划" },
+        { id: "risk", label: "风险预警", meta: "失效条件 / 追踪", icon: BellRing, target: { view: "risk" }, badge: riskBadge },
         { id: "limit-board", label: "连板接力", meta: "情绪周期 / 梯队", icon: Flame, target: { view: "limitBoard" }, badge: "后续" },
         { id: "small-cap", label: "小盘强势", meta: "量价异动 / 流动性", icon: Zap, target: { view: "smallCap" }, badge: "后续" }
       ]

@@ -1,5 +1,5 @@
 import { getAnalysisReport, listAnalysisReports } from "@/lib/db/reports";
-import { eastmoneyAdapter } from "@/lib/eastmoney/adapter";
+import { serenityCandidateUniverseProvider, type SerenityCandidateSectorHint } from "@/lib/serenity/candidateUniverseProvider";
 import { normalizeStockCode } from "@/lib/strategy/candidateUtils";
 import type { AnalysisReport, SectorConstituentStock, StockCandidate } from "@/lib/types";
 import type { SerenityMarket, SerenityPreviewCandidate, SerenityThemeSuggestion } from "@/lib/serenity/types";
@@ -16,7 +16,7 @@ type CandidateBuildResult = {
   warnings: string[];
 };
 
-const THEME_SECTOR_MAP: Record<string, Array<{ name: string; type: "industry" | "concept"; layer: string }>> = {
+const THEME_SECTOR_MAP: Record<string, SerenityCandidateSectorHint[]> = {
   "ai-semiconductor": [
     { name: "半导体", type: "industry", layer: "算力芯片/设计" },
     { name: "半导体设备", type: "concept", layer: "关键设备/工艺平台" },
@@ -82,27 +82,23 @@ export async function buildSerenityCandidatePreview(input: CandidateBuildInput):
 
   const sectorHints = sectorHintsForTheme(input.theme, input.normalizedTheme);
   const sectorLimit = Math.max(8, Math.ceil(limit / Math.max(sectorHints.length, 1)));
-  const sectorResults = await Promise.all(sectorHints.slice(0, 5).map(async (hint) => {
-    const result = await eastmoneyAdapter.getSectorConstituents(hint.name, hint.type, { timeoutMs: 25000, retries: 1 }).catch((error) => ({
-      data: null,
-      warnings: [`东方财富板块成分获取失败：${hint.name} ${error instanceof Error ? error.message : String(error)}`]
-    }));
-    return { hint, result };
-  }));
+  const sectorResults = await serenityCandidateUniverseProvider.fetchSectorConstituents(sectorHints.slice(0, 5), { timeoutMs: 25000, retries: 1 });
 
   for (const { hint, result } of sectorResults) {
     warnings.push(...(result.warnings ?? []));
+    const fetchedAt = new Date().toISOString();
     for (const stock of (result.data?.stocks ?? []).slice(0, sectorLimit)) {
-      mergeCandidate(byCode, fromSectorConstituent(stock, hint.name, hint.layer));
+      mergeCandidate(byCode, fromSectorConstituent(stock, hint.name, hint.layer, fetchedAt));
     }
   }
 
   const candidates = Array.from(byCode.values())
     .sort((left, right) => right.score - left.score || (right.amount ?? 0) - (left.amount ?? 0))
-    .slice(0, limit);
+    .slice(0, limit)
+    .map(normalizePreviewMissingProof);
 
   if (!candidates.length) warnings.push("没有生成自动候选池：最新报告和东方财富相关板块均未提供可用候选。");
-  return { candidates, warnings };
+  return { candidates, warnings: normalizeCandidateBuildWarnings(candidates, warnings) };
 }
 
 function candidatesFromLatestReport(input: CandidateBuildInput, keywords: Set<string>): SerenityPreviewCandidate[] {
@@ -114,11 +110,14 @@ function candidatesFromLatestReport(input: CandidateBuildInput, keywords: Set<st
     const sectorMatch = textMatchesKeywords(sector.name, keywords);
     if (!sectorMatch) continue;
     for (const stock of sector.coreStocks.slice(0, 6)) {
+      const stockText = [stock.name, sector.name, stock.role, stock.limitStatus].filter(Boolean).join(" ");
+      if (!passesThemeStrictGate(stockText, input.normalizedTheme, keywords)) continue;
       result.push({
         code: normalizeStockCode(stock.marketCode || stock.code),
         name: stock.name,
         source: "latest_mainline",
         sourceLabel: `最新主线核心股：${sector.name}`,
+        fetchedAt: latest.createdAt,
         sectorName: sector.name,
         chainPosition: inferLayerFromText(sector.name, input.normalizedTheme),
         matchReason: `出现在最新分析报告的 ${sector.name} 主线核心结构中，角色为 ${stock.role}，但仍需主营/公告验证是否真属于 ${input.theme}。`,
@@ -143,6 +142,7 @@ function candidatesFromLatestReport(input: CandidateBuildInput, keywords: Set<st
       candidate.mainlineAttribution?.reason
     ].filter(Boolean).join(" ");
     if (!textMatchesKeywords(text, keywords)) continue;
+    if (!passesThemeStrictGate(text, input.normalizedTheme, keywords)) continue;
     result.push(fromStockCandidate(candidate, input.theme, input.normalizedTheme));
   }
 
@@ -157,6 +157,7 @@ function fromStockCandidate(candidate: StockCandidate, theme: string, normalized
     name: candidate.name,
     source: "latest_mainline",
     sourceLabel: `最新报告候选股：${candidate.sectorName}`,
+    fetchedAt: candidate.quote?.fetchedAt,
     sectorName: candidate.sectorName,
     chainPosition: inferLayerFromText(`${candidate.sectorName} ${candidate.companyKnowledge?.industryChainPosition ?? ""}`, normalizedTheme),
     matchReason: candidate.mainlineAttribution?.reason || `来自最新报告候选池，需继续验证是否真正对应 ${theme}。`,
@@ -174,12 +175,13 @@ function fromStockCandidate(candidate: StockCandidate, theme: string, normalized
   };
 }
 
-function fromSectorConstituent(stock: SectorConstituentStock, sectorName: string, layer: string): SerenityPreviewCandidate {
+function fromSectorConstituent(stock: SectorConstituentStock, sectorName: string, layer: string, fetchedAt: string): SerenityPreviewCandidate {
   return {
     code: normalizeStockCode(stock.marketCode || stock.code),
     name: stock.name,
     source: "eastmoney_sector",
     sourceLabel: `东方财富板块成分：${sectorName}`,
+    fetchedAt,
     sectorName,
     chainPosition: layer,
     matchReason: `属于东方财富 ${sectorName} 板块成分，说明具备板块归属线索；是否接近真实瓶颈仍需主营、公告和财报验证。`,
@@ -206,10 +208,47 @@ function mergeCandidate(byCode: Map<string, SerenityPreviewCandidate>, candidate
     ...better,
     score: Math.max(candidate.score, existing.score) + 4,
     sourceLabel: Array.from(new Set([better.sourceLabel, other.sourceLabel])).join("；"),
+    fetchedAt: better.fetchedAt ?? other.fetchedAt,
     matchReason: `${better.matchReason}；同时命中：${other.sourceLabel}`,
     evidenceStrength: maxEvidence(existing.evidenceStrength, candidate.evidenceStrength),
-    missingProof: Array.from(new Set([...existing.missingProof, ...candidate.missingProof])).slice(0, 6)
+    missingProof: normalizeSerenityMissingProof([...existing.missingProof, ...candidate.missingProof])
   });
+}
+
+function normalizePreviewMissingProof(candidate: SerenityPreviewCandidate): SerenityPreviewCandidate {
+  return {
+    ...candidate,
+    missingProof: normalizeSerenityMissingProof(candidate.missingProof)
+  };
+}
+
+function normalizeSerenityMissingProof(items: string[]) {
+  const buckets = new Map<string, string>();
+  for (const raw of items.map((item) => item.trim()).filter(Boolean)) {
+    const key = serenityMissingProofBucket(raw);
+    if (!buckets.has(key)) buckets.set(key, serenityMissingProofLabel(key, raw));
+  }
+  return Array.from(buckets.values()).slice(0, 6);
+}
+
+function serenityMissingProofBucket(text: string) {
+  if (/主营|业务|产品|F10|产业链位置|匹配/.test(text)) return "business";
+  if (/公告|财报|占比|收入/.test(text)) return "filing";
+  if (/客户|订单|导入/.test(text)) return "customer";
+  if (/产能|认证|项目|良率|扩产/.test(text)) return "capacity";
+  if (/资金|成交|行情|盘口/.test(text)) return "market";
+  return text;
+}
+
+function serenityMissingProofLabel(key: string, fallback: string) {
+  const labels: Record<string, string> = {
+    business: "主营/产品/产业链位置匹配证据",
+    filing: "公告或财报中相关业务收入、占比或产品证据",
+    customer: "客户、订单或导入进度证据",
+    capacity: "产能、认证、良率或扩产约束证据",
+    market: "资金、成交或盘口连续性证据"
+  };
+  return labels[key] ?? fallback;
 }
 
 function maxEvidence(left: SerenityPreviewCandidate["evidenceStrength"], right: SerenityPreviewCandidate["evidenceStrength"]) {
@@ -242,6 +281,67 @@ function buildKeywordSet(theme: string, normalizedTheme?: SerenityThemeSuggestio
   }
   for (const compound of buildCompoundKeywords(normalizedTheme)) tokens.add(compound);
   return tokens;
+}
+
+function passesThemeStrictGate(text: string, normalizedTheme: SerenityThemeSuggestion | undefined, keywords: Set<string>) {
+  if (!normalizedTheme) return textMatchesKeywords(text, keywords);
+  const clean = cleanText(text);
+  if (!clean) return false;
+
+  if (isThemeExcluded(clean, normalizedTheme)) return false;
+  if (normalizedTheme.id === "robot-actuator") return hasRobotActuatorEvidence(clean);
+
+  const required = strictThemeKeywords(normalizedTheme);
+  if (!required.length) return textMatchesKeywords(text, keywords);
+  return required.some((keyword) => clean.includes(keyword));
+}
+
+function strictThemeKeywords(normalizedTheme: SerenityThemeSuggestion) {
+  if (normalizedTheme.id === "robot-actuator") return ["机器人", "人形机器人", "减速器", "丝杠", "执行器", "空心杯", "谐波", "关节模组", "伺服电机", "步进电机", "力传感器", "触觉传感器"];
+  if (normalizedTheme.id === "cpo-optical") return ["cpo", "光模块", "光芯片", "光器件", "光通信", "硅光", "800g", "1.6t"];
+  if (normalizedTheme.id === "ai-semiconductor") return ["半导体", "芯片", "集成电路", "晶圆", "光刻", "刻蚀", "电子特气", "先进封装"];
+  if (normalizedTheme.id === "high-speed-pcb") return ["pcb", "覆铜板", "高速板", "连接器", "hdi"];
+  return [];
+}
+
+function isThemeExcluded(cleanTextValue: string, normalizedTheme: SerenityThemeSuggestion) {
+  if (normalizedTheme.id === "robot-actuator") {
+    const robotTerms = ["机器人", "人形机器人", "减速器", "丝杠", "执行器", "空心杯", "谐波", "关节模组", "伺服", "步进", "力传感器", "触觉传感器"];
+    const opticalCommunicationTerms = ["cpo", "光模块", "光通信", "光芯片", "光器件", "硅光", "通信设备", "收发模块"];
+    return hasAny(cleanTextValue, opticalCommunicationTerms) && !hasAny(cleanTextValue, robotTerms);
+  }
+  return false;
+}
+
+function hasRobotActuatorEvidence(cleanTextValue: string) {
+  const hardTerms = ["机器人", "人形机器人", "减速器", "丝杠", "执行器", "空心杯", "谐波", "关节模组", "rv减速", "谐波减速"];
+  if (hasAny(cleanTextValue, hardTerms)) return true;
+
+  const motorTerms = ["伺服电机", "步进电机", "无框力矩电机", "空心杯电机"];
+  if (hasAny(cleanTextValue, motorTerms)) return true;
+
+  const sensorTerms = ["六维力传感器", "力传感器", "触觉传感器"];
+  if (hasAny(cleanTextValue, sensorTerms)) return true;
+
+  return false;
+}
+
+function hasAny(text: string, needles: string[]) {
+  return needles.some((needle) => text.includes(needle));
+}
+
+function normalizeCandidateBuildWarnings(candidates: SerenityPreviewCandidate[], warnings: string[]) {
+  const uniqueWarnings = Array.from(new Set(warnings.filter(Boolean)));
+  if (!candidates.length) return uniqueWarnings.slice(0, 12);
+
+  const fetchFailures = uniqueWarnings.filter((warning) => /失败|fetch failed|timeout|超时|网络|解析错误/i.test(warning));
+  const otherWarnings = uniqueWarnings.filter((warning) => !fetchFailures.includes(warning));
+  if (!fetchFailures.length) return otherWarnings.slice(0, 8);
+
+  return [
+    ...otherWarnings,
+    `部分候选来源未覆盖：${fetchFailures.length} 条板块/补证请求失败，当前候选已由可用来源生成；失败来源不会被静默补值。`
+  ].slice(0, 8);
 }
 
 function buildCompoundKeywords(normalizedTheme?: SerenityThemeSuggestion) {

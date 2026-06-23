@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDataSourceSettings } from "@/lib/db/settings";
+import { testProviderCapabilities } from "@/lib/data/providerCapabilityAudit";
 import type { DataProviderId } from "@/lib/types";
 
 export async function POST(request: Request) {
@@ -7,6 +8,11 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const providerId = sanitizeProviderId(body.providerId);
+    const providerAudit = await testProviderCapabilities(providerId, {
+      apiKey: sanitizeString(body.apiKey),
+      enabled: true
+    });
+
     if (providerId !== "tushare") {
       return NextResponse.json({
         success: true,
@@ -14,57 +20,33 @@ export async function POST(request: Request) {
           ok: true,
           providerId,
           elapsedMs: Date.now() - startedAt,
-          message: "该数据源当前无需密钥测试，系统会在分析时按字段留痕。"
+          message: providerAudit.summary,
+          capabilityAudit: providerAudit
         },
         error: null
       });
     }
 
-    const saved = getDataSourceSettings().providers.find((provider) => provider.id === "tushare");
-    const token = sanitizeString(body.apiKey) || saved?.apiKey || "";
-    if (!token) throw new Error("Tushare token 为空");
+    const connectionOk = providerAudit.connected;
+    const available = providerAudit.checks.filter((check) => check.status === "available" || check.status === "available_empty").length;
+    const denied = providerAudit.checks.filter((check) => check.status === "permission_denied").length;
+    const failed = providerAudit.checks.filter((check) => check.status === "failed").length;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
-    try {
-      const response = await fetch("https://api.tushare.pro", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          api_name: "stock_basic",
-          token,
-          params: {
-            exchange: "",
-            list_status: "L"
-          },
-          fields: "ts_code,symbol,name,area,industry,list_date"
-        }),
-        signal: controller.signal
-      });
-      const text = await response.text();
-      let json: any = null;
-      try {
-        json = text ? JSON.parse(text) : null;
-      } catch {
-        json = null;
+    return NextResponse.json({
+      success: connectionOk,
+      data: {
+        ok: connectionOk,
+        providerId,
+        elapsedMs: Date.now() - startedAt,
+        recordCount: providerAudit.checks.find((check) => check.key === "tushare.stock_basic")?.recordCount,
+        message: `${providerAudit.summary}；可用 ${available} 项，权限不足 ${denied} 项，失败 ${failed} 项。`,
+        capabilityAudit: providerAudit
+      },
+      error: connectionOk ? null : {
+        code: "DATA_SOURCE_CONNECTION_TEST_FAILED",
+        message: providerAudit.summary
       }
-      if (!response.ok) throw new Error(`Tushare HTTP ${response.status}`);
-      if (json?.code !== 0) throw new Error(json?.msg || "Tushare 返回非成功状态");
-      const count = Array.isArray(json?.data?.items) ? json.data.items.length : 0;
-      return NextResponse.json({
-        success: true,
-        data: {
-          ok: true,
-          providerId,
-          elapsedMs: Date.now() - startedAt,
-          recordCount: count,
-          message: count ? "Tushare 连接测试成功" : "Tushare 已连通，但测试接口返回空数据"
-        },
-        error: null
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+    }, { status: 200 });
   } catch (error) {
     return NextResponse.json({
       success: false,

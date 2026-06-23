@@ -8,6 +8,8 @@ import { EventTimelinePanel, MacroRiskPanel, MarketStatusPanel, SentimentRadarPa
 import { MarketCognitionCanvas } from "@/components/StrategyCockpitCognitionSections";
 import { FundsAndRiskPanel, SectorRadarPanel, StrategyMapPanel } from "@/components/StrategyCockpitInsightSections";
 import { CandidatePanel } from "@/components/StrategyCockpitCandidatePanel";
+import { ReportDataHealthBanner } from "@/components/ReportDataHealthBanner";
+import { ReportFreshnessBanner } from "@/components/ReportFreshnessBanner";
 import { fetchJson, marketStateTone } from "@/components/StrategyCockpitUtils";
 import type { MacroSnapshot, MarketCognitionSnapshot, MarketSessionSnapshot, ReportSummary } from "@/components/StrategyCockpitTypes";
 import type { AnalysisReport, AppSettings } from "@/lib/types";
@@ -45,7 +47,7 @@ export function StrategyCockpit() {
 
   async function loadLatestReport() {
     try {
-      const list = await fetchJson<ReportSummary[]>("/api/reports?displayable=1");
+      const list = await fetchJson<ReportSummary[]>("/api/reports?displayable=1&limit=12");
       setReports(list.data ?? []);
       const id = list.data?.[0]?.id;
       if (!id) return;
@@ -149,6 +151,8 @@ export function StrategyCockpit() {
           <div className="mx-auto flex max-w-[1680px] flex-col gap-4">
             <TopBar report={report} loading={loading} onRun={runAnalysis} session={sessionSnapshot} />
             {message ? <div className="rounded-xl border border-cyan-400/25 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">{message}</div> : null}
+            <ReportFreshnessBanner report={report} session={sessionSnapshot} />
+            <ReportDataHealthBanner report={report} />
             <SessionAwarenessPanel session={sessionSnapshot} />
 
             <section className="grid gap-4 2xl:grid-cols-[1fr_440px]">
